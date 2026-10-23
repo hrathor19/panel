@@ -1,0 +1,24 @@
+{
+  "name": "npf-gateway",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Credential-shielding gateway for NoPaperForms publisher panels",
+  "scripts": {
+    "start": "node src/server.js",
+    "verify": "node bin/verify.js",
+    "useradd": "node bin/useradd.js",
+    "userlist": "node bin/useradd.js --list",
+    "passwd": "node bin/useradd.js --reset",
+    "test": "node bin/test.js",
+    "doctor": "node bin/doctor.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

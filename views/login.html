@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Panel Gateway</title>
+<link rel="stylesheet" href="/gw-assets/app.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
+  .wrap { width: min(394px, 100%); }
+  .mark { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 17px; font-weight: 640; letter-spacing: -.02em; margin-bottom: 7px; }
+  .mark .dot { width: 11px; height: 11px; border-radius: 3.5px; background: var(--accent); }
+  .lede { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 22px; }
+  .foot { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="mark"><span class="dot"></span> Panel Gateway</div>
+  <p class="lede">Sign in with the account you were given.</p>
+
+  <form class="card" id="form" novalidate>
+    <div class="card-body">
+      <div class="inline-error" id="error"></div>
+      <div class="field">
+        <label for="email">Email address</label>
+        <input id="email" type="email" autocomplete="username" required autofocus spellcheck="false">
+      </div>
+      <div class="field" style="margin-bottom:18px">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="primary" type="submit" id="submit" style="width:100%">Sign in</button>
+    </div>
+  </form>
+
+  <p class="foot">Lost your password? Ask an administrator to reset it.</p>
+</div>
+
+<script type="module">
+import { $, api, toast } from '/gw-assets/ui.js';
+
+const submit = $('submit');
+const errorBox = $('error');
+
+$('form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  errorBox.textContent = '';
+
+  const email = $('email').value.trim();
+  const password = $('password').value;
+  if (!email || !password) {
+    errorBox.textContent = 'Enter your email and password.';
+    return;
+  }
+
+  submit.disabled = true;
+  submit.textContent = 'Signing in…';
+
+  try {
+    await api('/gw/auth/login', { method: 'POST', body: { email, password } });
+    const next = new URLSearchParams(location.search).get('next');
+    location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/panels';
+  } catch (err) {
+    errorBox.textContent = err.message;
+    $('password').value = '';
+    $('password').focus();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Sign in';
+  }
+});
+</script>
+</body>
+</html>

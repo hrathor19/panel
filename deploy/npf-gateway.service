@@ -1,0 +1,50 @@
+# Install to /etc/systemd/system/npf-gateway.service
+[Unit]
+Description=NPF Panel Gateway
+Documentation=https://github.com/kollegeapply/npf-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=npfgw
+Group=npfgw
+WorkingDirectory=/opt/npf-gateway
+EnvironmentFile=/opt/npf-gateway/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/server.js
+
+Restart=always
+RestartSec=5
+# Give up relaunching if it crashes repeatedly, so a bad config does not spin
+# forever on a small box.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=npf-gateway
+
+# Hardening. The gateway holds panel credentials, so it gets no more of the
+# system than it needs.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# The one directory it may write to.
+ReadWritePaths=/opt/npf-gateway/data
+
+# Keeps the gateway from starving a 1GB VM that also runs other services.
+MemoryMax=320M
+MemoryHigh=256M
+
+[Install]
+WantedBy=multi-user.target
