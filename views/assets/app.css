@@ -238,7 +238,75 @@ dialog::backdrop { background: rgba(10, 14, 20, .5); backdrop-filter: blur(2px);
 dialog .d-head { padding: 17px 20px 0; }
 dialog .d-head h3 { margin: 0; font-size: 16.5px; font-weight: 620; letter-spacing: -.01em; }
 dialog .d-head p { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
-dialog .d-body { padding: 17px 20px; }
+dialog .d-body { padding: 17px 20px; overflow-y: auto; }
+
+/* A tall dialog must scroll inside itself, not run off the screen. Header and
+   footer stay put; only the body moves. */
+dialog.tall {
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 860px);
+  width: min(660px, calc(100vw - 28px));
+}
+/* The form sits between the dialog and its sections, so it has to carry the
+   column layout too or the body never becomes the scrolling part. */
+dialog.tall > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+dialog.tall .d-head,
+dialog.tall .d-foot { flex: none; }
+dialog.tall .d-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* ── institute picker ───────────────────────────────────────────────── */
+/* These accounts carry 100+ institutes and people pick a handful, so the few
+   that are chosen are shown as chips up top rather than left to be hunted for
+   somewhere in the scroll. */
+
+.inst-group { border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 11px; overflow: hidden; }
+
+.inst-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.inst-head .check { margin: 0; }
+.inst-head .check label { font-size: 13.5px; font-weight: 600; }
+.inst-head .count {
+  margin-left: auto; font-size: 11.5px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-3); color: var(--muted); white-space: nowrap;
+}
+.inst-head .count.some { background: var(--accent-soft); color: var(--accent); }
+.inst-head .count.none { background: var(--danger-soft); color: var(--danger); }
+
+.inst-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.inst-chips:empty { display: none; }
+.inst-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; padding: 3px 5px 3px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); max-width: 100%;
+}
+.inst-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inst-chip button {
+  border: 0; background: none; color: inherit; cursor: pointer;
+  padding: 0 4px; font-size: 15px; line-height: 1; border-radius: 999px;
+}
+.inst-chip button:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.inst-tools { display: flex; gap: 7px; align-items: center; padding: 10px 12px 0; }
+.inst-tools input { flex: 1; padding: 6px 10px; font-size: 13px; }
+
+.inst-list {
+  max-height: 230px; overflow-y: auto; padding: 8px 12px 12px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px;
+}
+.inst-list .check { margin: 0; padding: 3px 0; align-items: center; }
+.inst-list .check label { font-size: 13.5px; font-weight: 450; cursor: pointer; }
+.inst-list .check:hover label { color: var(--accent); }
+
+.inst-empty { padding: 14px 12px; font-size: 13px; color: var(--muted); grid-column: 1 / -1; }
+
+@media (max-width: 620px) {
+  .inst-list { grid-template-columns: 1fr; }
+}
 dialog .d-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg); }
 
 .inline-error { background: var(--danger-soft); color: var(--danger); padding: 9px 12px; border-radius: var(--r-sm); font-size: 13.5px; margin-bottom: 14px; }

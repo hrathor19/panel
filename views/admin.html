@@ -24,7 +24,7 @@
   </div>
 </div>
 
-<dialog id="userDialog"><form id="userForm">
+<dialog id="userDialog" class="tall"><form id="userForm">
   <div class="d-head"><h3 id="userTitle">Add user</h3><p id="userLede"></p></div>
   <div class="d-body">
     <div class="inline-error" id="userError"></div>
@@ -346,35 +346,26 @@ function selectedPanels() {
 }
 
 function renderInstituteGroup(panel, assigned) {
-  const list = el('div', { class: 'inst-list' }, el('span', { class: 'inst-empty', text: 'Loading…' }));
-  const count = el('span', { class: 'count' });
+  const chips = el('div', { class: 'inst-chips' });
+  const list = el('div', { class: 'inst-list' }, el('div', { class: 'inst-empty', text: 'Loading institutes…' }));
+  const count = el('span', { class: 'count', text: '…' });
 
   const allBox = el('input', {
     type: 'checkbox',
     checked: assigned === '*' || assigned === undefined,
-    onChange: (e) => {
-      for (const box of list.querySelectorAll('input')) box.disabled = e.target.checked;
-      updateCount();
-    },
+    onChange: () => { syncMode(); refresh(); },
   });
 
-  // These accounts carry a hundred-plus institutes; picking three out of a
-  // scrolling list without a filter is miserable.
   const filter = el('input', {
     type: 'search', placeholder: 'Filter institutes…',
-    onInput: (e) => {
-      const q = e.target.value.toLowerCase().trim();
-      for (const row of list.querySelectorAll('label')) {
-        row.hidden = Boolean(q) && !row.textContent.toLowerCase().includes(q);
-      }
-    },
+    onInput: (e) => applyFilter(e.target.value.toLowerCase().trim()),
   });
 
   const clear = el('button', {
-    type: 'button', class: 'sm ghost',
+    type: 'button', class: 'sm',
     onClick: () => {
       for (const box of list.querySelectorAll('input')) box.checked = false;
-      updateCount();
+      refresh();
     },
   }, 'Clear');
 
@@ -382,46 +373,92 @@ function renderInstituteGroup(panel, assigned) {
 
   const group = el('div', { class: 'inst-group', dataset: { panel: panel.id } },
     el('div', { class: 'inst-head' },
-      el('label', { class: 'check', style: 'margin:0' }, allBox, el('span', { text: panel.label })),
+      el('label', { class: 'check' }, allBox, el('span', { text: panel.label })),
       count),
-    tools,
-    list);
+    chips, tools, list);
 
-  // The filter is pointless while "all" is ticked, since nothing is selectable.
-  function syncTools() { tools.hidden = allBox.checked; }
-  allBox.addEventListener('change', syncTools);
-  syncTools();
+  function boxes() {
+    return [...list.querySelectorAll('input[type=checkbox]')];
+  }
 
-  function updateCount() {
-    const boxes = [...list.querySelectorAll('input')];
-    if (allBox.checked) count.textContent = `all ${boxes.length || ''}`.trim();
-    else count.textContent = `${boxes.filter((b) => b.checked).length} of ${boxes.length}`;
+  function applyFilter(query) {
+    let shown = 0;
+    for (const row of list.querySelectorAll('.check')) {
+      const hit = !query || row.textContent.toLowerCase().includes(query);
+      row.hidden = !hit;
+      if (hit) shown += 1;
+    }
+    const none = list.querySelector('.inst-empty');
+    if (none) none.remove();
+    if (shown === 0) list.append(el('div', { class: 'inst-empty', text: `Nothing matches “${query}”.` }));
+  }
+
+  // The chosen few live at the top as chips: with a hundred institutes, a tick
+  // somewhere in the scroll is not an answer to "who can he see?".
+  function refresh() {
+    chips.replaceChildren();
+    const picked = boxes().filter((b) => b.checked);
+
+    if (!allBox.checked) {
+      for (const box of picked) {
+        const name = box.dataset.name;
+        chips.append(el('span', { class: 'inst-chip' },
+          el('span', { text: name, title: name }),
+          el('button', {
+            type: 'button', 'aria-label': `Remove ${name}`,
+            onClick: () => { box.checked = false; refresh(); },
+          }, '×'),
+        ));
+      }
+    }
+
+    const total = boxes().length;
+    if (allBox.checked) {
+      count.textContent = total ? `all ${total}` : 'all';
+      count.className = 'count';
+    } else {
+      count.textContent = `${picked.length} of ${total}`;
+      count.className = `count ${picked.length ? 'some' : 'none'}`;
+    }
+  }
+
+  function syncMode() {
+    const off = allBox.checked;
+    chips.hidden = off;
+    tools.hidden = off;
+    list.hidden = off;
+    for (const box of boxes()) box.disabled = off;
   }
 
   institutesFor(panel.id).then((institutes) => {
     list.replaceChildren();
+
     if (institutes instanceof Error) {
-      list.append(el('span', { class: 'inst-empty', text: `Could not load: ${institutes.message}` }));
-      count.textContent = '';
+      list.append(el('div', { class: 'inst-empty', text: `Could not load institutes: ${institutes.message}` }));
+      count.textContent = '—';
       return;
     }
     if (institutes.length === 0) {
-      list.append(el('span', { class: 'inst-empty', text: 'This panel reports no institutes.' }));
+      list.append(el('div', { class: 'inst-empty', text: 'This panel reports no institutes.' }));
+      count.textContent = '0';
       return;
     }
+
     const chosen = new Set(Array.isArray(assigned) ? assigned.map(String) : []);
     for (const inst of institutes) {
       list.append(el('label', { class: 'check' },
         el('input', {
-          type: 'checkbox', value: inst.id, disabled: allBox.checked,
-          checked: chosen.has(String(inst.id)), onChange: updateCount,
+          type: 'checkbox', value: inst.id, dataset: { name: inst.name },
+          checked: chosen.has(String(inst.id)), onChange: refresh,
         }),
         el('span', { text: inst.name }),
       ));
     }
-    updateCount();
+    syncMode();
+    refresh();
   });
 
+  syncMode();
   return group;
 }
 
