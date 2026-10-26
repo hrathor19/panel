@@ -53,6 +53,24 @@ export function startFakePanel({ port, accessKey, rek, username, password, token
     if (got !== token) {
       return send(401, 'application/json', JSON.stringify({ status: 0, message: 'Unauthorised' }));
     }
+
+    // The institute list the dropdown is built from: an object map, as the
+    // real panel returns it.
+    if (url.pathname === '/publishers/v1/collegeList/') {
+      return send(200, 'application/json', JSON.stringify({
+        status: 1,
+        data: { colleges: { 101: 'Alpha University', 102: 'Beta Institute', 103: 'Gamma College' } },
+      }));
+    }
+
+    // Everything else echoes what it was asked for, so a test can prove the
+    // gateway either forwarded or refused.
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString('utf8');
+    let body = null;
+    if (raw) { try { body = JSON.parse(decryptPayload(raw, rek)); } catch { body = 'unreadable'; } }
+    seen[seen.length - 1].body = body;
     if (url.pathname.includes('download')) {
       res.writeHead(200, { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename=leads.csv' });
       return res.end('name,email\nLead One,l1@x.com');

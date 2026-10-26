@@ -10,6 +10,7 @@ import { getToken, refreshToken } from '../npf-session.js';
 import { decryptPayload } from '../npf-crypto.js';
 import { checkPolicy } from '../policy.js';
 import { checkVolume } from '../leak-guard.js';
+import { ALL as ALL_INSTITUTES, allowedFor, checkInstitutes, filterCollegeList } from '../institutes.js';
 import { protectionScript } from '../protection.js';
 import { BROWSER_HEADERS } from '../upstream-headers.js';
 import { audit } from '../audit.js';
@@ -155,6 +156,35 @@ api.all(/.*/, async (req, res) => {
     });
   }
 
+  // Institute scoping. Only restricted people pay the cost of this: reading the
+  // request body means undoing the panel's own encryption, which is ~40ms of
+  // PBKDF2 and not worth spending on someone who may see everything anyway.
+  const allowedInstitutes = allowedFor(req.gwUser, req.panel.id);
+  req.allowedInstitutes = allowedInstitutes;
+
+  if (allowedInstitutes !== ALL_INSTITUTES) {
+    let payload = null;
+    if (req.body?.length) {
+      const npf = await getNpfConstants(req.panel.origin);
+      payload = readRequestPayload(req.body, npf.requestEncryptionKey);
+    }
+
+    const scope = checkInstitutes({ allowed: allowedInstitutes, path, body: payload });
+    if (!scope.allowed) {
+      audit({
+        event: 'blocked', user: req.session.email, panel: req.panel.slug, path,
+        reason: scope.reason, denied: scope.denied, ip: req.ip,
+      });
+      return npfJson(res, 403, {
+        status: 0,
+        message:
+          scope.reason === 'institute-required'
+            ? 'Select one of your assigned institutes first.'
+            : 'You do not have access to that institute.',
+      });
+    }
+  }
+
   try {
     const token = await getToken(req.panel);
     const upstream = await forward(req, token);
@@ -213,7 +243,14 @@ async function relay(upstream, req, res, usedToken) {
         .send(await retry.text());
     }
 
-    return res.status(upstream.status).type('application/json').send(JSON.stringify(body));
+    // The dropdown is built from this response, so it is trimmed to what the
+    // person holds. The checks above are what actually stop them asking for
+    // more; this just stops the UI offering it.
+    const shaped = isCollegeList(req.path)
+      ? filterCollegeList(body, req.allowedInstitutes ?? ALL_INSTITUTES)
+      : body;
+
+    return res.status(upstream.status).type('application/json').send(JSON.stringify(shaped));
   }
 
   res.status(upstream.status);
@@ -223,6 +260,28 @@ async function relay(upstream, req, res, usedToken) {
 
   if (!upstream.body) return res.end();
   return Readable.fromWeb(upstream.body).pipe(res);
+}
+
+// The panel encrypts request bodies, so reading one means undoing that. A body
+// we cannot read is left as null, and checkInstitutes refuses it on any
+// institute-scoped endpoint rather than waving it through.
+function readRequestPayload(raw, key) {
+  const text = raw.toString('utf8');
+  try {
+    return JSON.parse(decryptPayload(text, key));
+  } catch {
+    // Not every endpoint encrypts; fall back to plain JSON before giving up.
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function isCollegeList(path) {
+  const clean = String(path).split('?')[0].replace(/^\/+/, '').replace(/\/+$/, '');
+  return clean === 'publishers/v1/collegeList';
 }
 
 function isUnauthorised(httpStatus, body) {

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakePanel } from './fake-panel.mjs';
+import { encryptPayload } from '../src/npf-crypto.js';
 
 const GW = 8190;
 const BASE = `http://localhost:${GW}`;
@@ -402,6 +403,95 @@ try {
 
   const capEntries = (await (await admin('/gw/admin/audit?limit=500')).json()).entries;
   t('hitting the cap is recorded against the person', capEntries.some((e) => e.reason === 'bulk-limit' && e.user === 'grazer@test.local'));
+
+
+  /* ── institute scoping ──────────────────────────────────────────── */
+  section('institute scoping');
+
+  // Encrypt a body exactly as the panel's own front end does, so the gateway
+  // has to undo it to see which institute is being asked for.
+  const sealed = (payload) => encryptPayload(JSON.stringify(payload), 'rek-for-panel-a');
+  const post = (who, path, payload) =>
+    who(path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: sealed(payload) });
+
+  const scoped = client();
+  const scopedUser = await (await admin('/gw/admin/users', {
+    method: 'POST',
+    json: {
+      email: 'scoped@test.local', name: 'Scoped', role: 'user', canExport: true, panels: '*',
+      institutes: { [A.id]: ['101'] },   // Alpha University only
+    },
+  })).json();
+  t('a user can be created with institute limits', scopedUser.user.institutes[A.id].length === 1);
+  await scoped('/gw/auth/login', { method: 'POST', json: { email: 'scoped@test.local', password: scopedUser.password } });
+
+  // the dropdown
+  const fullList = await (await exporter('/p/npf/npf-api/publishers/v1/collegeList/')).json();
+  t('an unrestricted user sees every institute', Object.keys(fullList.data.colleges).length === 3);
+
+  const cutList = await (await scoped('/p/npf/npf-api/publishers/v1/collegeList/')).json();
+  t('a scoped user sees only their institute', Object.keys(cutList.data.colleges).join() === '101');
+  t('the names of other institutes are not leaked', !JSON.stringify(cutList).includes('Beta Institute'));
+
+  // the id in the URL path
+  const pathOk = await scoped('/p/npf/npf-api/publishers/v1/filtersByCollege/101/x/y');
+  t('assigned institute allowed in the URL path', pathOk.status === 200);
+
+  const pathBad = await scoped('/p/npf/npf-api/publishers/v1/filtersByCollege/102/x/y');
+  t('unassigned institute refused in the URL path', pathBad.status === 403);
+  t('refusal explains itself', /do not have access to that institute/i.test((await pathBad.json()).message));
+
+  // the id inside the encrypted body
+  const bodyOk = await post(scoped, '/p/npf/npf-api/publishers/v1/getLeadDetailsViewList/', { filters: { college_id: '101' }, page: 1 });
+  t('assigned institute allowed in an encrypted body', bodyOk.status === 200);
+
+  const bodyBad = await post(scoped, '/p/npf/npf-api/publishers/v1/getLeadDetailsViewList/', { filters: { college_id: '102' }, page: 1 });
+  t('unassigned institute refused in an encrypted body', bodyBad.status === 403);
+
+  const nestedBad = await post(scoped, '/p/npf/npf-api/publishers/v1/getLeadDetailsViewList/', { a: { b: [{ collegeId: 103 }] } });
+  t('a deeply nested institute id is still found', nestedBad.status === 403);
+
+  // omitting it entirely must not mean "all institutes"
+  const noneGiven = await post(scoped, '/p/npf/npf-api/publishers/v1/getLeadDetailsViewList/', { page: 1 });
+  t('naming no institute is refused, not treated as all', noneGiven.status === 403);
+  t('that refusal asks them to pick one', /select one of your assigned institutes/i.test((await noneGiven.json()).message));
+
+  // endpoints that have nothing to do with an institute keep working
+  t('institute-agnostic endpoints still work', (await scoped('/p/npf/npf-api/publishers/v1/menuList')).status === 200);
+
+  // exports are scoped too — this is the one that would actually hurt
+  const exportBad = await post(scoped, '/p/npf/npf-api/publishers/v1/downloadLeadDetailsViewList', { filters: { college_id: '102' } });
+  t('export of an unassigned institute is refused', exportBad.status === 403);
+  const exportOk = await post(scoped, '/p/npf/npf-api/publishers/v1/downloadLeadDetailsViewList', { filters: { college_id: '101' } });
+  t('export of an assigned institute is allowed', exportOk.status === 200);
+
+  // nothing unassigned ever reached the panel
+  t('no refused institute request reached the panel',
+    !panelA.seen.some((r) => JSON.stringify(r.body ?? '').includes('102') || r.path.includes('/102/')));
+
+  // an unrestricted user is unaffected
+  const wideOpen = await post(exporter, '/p/npf/npf-api/publishers/v1/getLeadDetailsViewList/', { filters: { college_id: '103' } });
+  t('an unrestricted user may still use any institute', wideOpen.status === 200);
+
+  // the admin list that feeds the checkboxes
+  const instList = await (await admin(`/gw/admin/panels/${A.id}/institutes`)).json();
+  t('admin can read the live institute list', instList.institutes.length === 3);
+  t('the list is sorted by name', instList.institutes[0].name === 'Alpha University');
+  t('each entry has an id and a name', instList.institutes.every((i) => i.id && i.name));
+
+  // changing the assignment takes effect without a re-login
+  await admin(`/gw/admin/users/${scopedUser.user.id}`, { method: 'PATCH', json: { institutes: { [A.id]: ['102'] } } });
+  const afterChange = client();
+  const reissued = await (await admin(`/gw/admin/users/${scopedUser.user.id}`, { method: 'PATCH', json: { resetPassword: true } })).json();
+  await afterChange('/gw/auth/login', { method: 'POST', json: { email: 'scoped@test.local', password: reissued.password } });
+  const nowAllowed = await afterChange('/p/npf/npf-api/publishers/v1/filtersByCollege/102/x/y');
+  const nowDenied = await afterChange('/p/npf/npf-api/publishers/v1/filtersByCollege/101/x/y');
+  t('a reassigned institute becomes reachable', nowAllowed.status === 200);
+  t('the previous institute becomes unreachable', nowDenied.status === 403);
+
+  const instEntries = (await (await admin('/gw/admin/audit?limit=500')).json()).entries;
+  t('institute refusals are recorded against the person',
+    instEntries.some((e) => e.reason === 'institute-not-assigned' && e.user === 'scoped@test.local'));
 
 } catch (err) {
   fail += 1;

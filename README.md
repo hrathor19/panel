@@ -50,6 +50,23 @@ whether they may download exports, and which panels they reach (all, or a
 list). Generated passwords are shown once and use an alphabet with no
 `l`/`I`/`1` or `O`/`0`, because they get read off screens and dictated.
 
+**Institutes** — each panel account can see many institutes, and the panel's own
+"Select Institute" dropdown lists all of them. In Admin → Users you can tick
+which institutes a person may open, per panel. Leave "Every institute" on and
+nothing changes for them.
+
+Enforced on the server, not just in the dropdown. The institute id reaches the
+panel three ways, and all three are checked: the URL path
+(`filtersByCollege/<id>/…`), the encrypted POST body (`college_id`, `collegeId`
+or `college`, at any depth), and the case where no institute is named at all —
+which is refused rather than allowed to span everything. The `collegeList`
+response is filtered too, so the dropdown only offers what they hold.
+
+Endpoints default to institute-scoped: one the vendor adds later fails closed,
+not open. The short list of genuinely institute-agnostic endpoints is in
+`src/institutes.js`. Reading the encrypted body costs ~40ms, so it is only done
+for people who actually have institute limits — everyone else is unaffected.
+
 **Panels** — name, address, shared username and password. **Test** signs in
 right then and reports what came back, so you can tell a wrong password from an
 unreachable panel. Passwords are encrypted at rest and never sent to a browser.

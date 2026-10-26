@@ -56,6 +56,15 @@
       <label>Panels this person may open</label>
       <div id="uPanels" style="display:grid;gap:3px;max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:var(--r-sm);padding:10px"></div>
     </div>
+
+    <div class="check" style="border-top:1px solid var(--border);padding-top:14px">
+      <input type="checkbox" id="uAllInst" checked>
+      <div><label for="uAllInst">Every institute</label>
+        <div class="hint">Untick to choose which institutes this person may open on each panel.</div></div>
+    </div>
+    <div class="field" id="uInstWrap" hidden>
+      <div id="uInstPanels"></div>
+    </div>
   </div>
   <div class="d-foot">
     <button type="button" data-close>Cancel</button>
@@ -107,6 +116,7 @@ import { $, el, icon, tag, api, toast, when, exactly, copy, emptyState, skeleton
 let PANELS = [];
 let USERS = [];
 let ME = null;
+let currentDialogUser = null;
 
 const PAGES = [
   { id: 'overview', label: 'Overview', icon: 'grid' },
@@ -209,6 +219,15 @@ async function renderOverview(view) {
 
 /* ── users ──────────────────────────────────────────────────────────── */
 
+function instituteSummary(user) {
+  if (!user.institutes || user.institutes === '*') return tag('All', 'accent');
+  const scoped = Object.entries(user.institutes).filter(([, v]) => v !== '*' && Array.isArray(v));
+  if (scoped.length === 0) return tag('All', 'accent');
+  const total = scoped.reduce((sum, [, ids]) => sum + ids.length, 0);
+  if (total === 0) return tag('None', 'bad');
+  return tag(`${total} selected`, 'warn');
+}
+
 function panelSummary(user) {
   if (user.panels === '*') return tag('All panels', 'accent');
   const names = PANELS.filter((p) => user.panels?.includes(p.id)).map((p) => p.label);
@@ -224,8 +243,8 @@ async function renderUsers(view) {
     el('span', { style: 'flex:1' }),
     el('button', { class: 'primary', onClick: () => openUser() }, icon('plus', 15), 'Add user'),
   ];
-  view.append(tableCard(['Person', 'Role', 'Exports', 'Panels', 'Last sign-in', ''], 'usersBody', toolbar));
-  skeletonRows($('usersBody'), 4, 6);
+  view.append(tableCard(['Person', 'Role', 'Exports', 'Panels', 'Institutes', 'Last sign-in', ''], 'usersBody', toolbar));
+  skeletonRows($('usersBody'), 4, 7);
 
   const data = await api('/gw/admin/users');
   USERS = data.users;
@@ -237,7 +256,7 @@ async function renderUsers(view) {
     body.replaceChildren();
 
     if (rows.length === 0) {
-      body.append(el('tr', {}, el('td', { colspan: 6 }, emptyState('users', 'Nobody found', filter ? 'Try a different search.' : 'Add your first user.'))));
+      body.append(el('tr', {}, el('td', { colspan: 7 }, emptyState('users', 'Nobody found', filter ? 'Try a different search.' : 'Add your first user.'))));
       return;
     }
 
@@ -250,6 +269,7 @@ async function renderUsers(view) {
         td('Role', user.role === 'admin' ? tag('Administrator', 'accent') : tag('User')),
         td('Exports', user.canExport ? tag('Allowed', 'ok') : el('span', { class: 'muted', text: 'No' })),
         td('Panels', panelSummary(user)),
+        td('Institutes', instituteSummary(user)),
         td('Last sign-in', el('span', { title: exactly(user.lastLoginAt), text: when(user.lastLoginAt) })),
         el('td', { class: 'right' }, el('div', { class: 'row-actions' },
           el('button', { class: 'sm', onClick: () => openUser(user) }, 'Edit'),
@@ -290,11 +310,158 @@ function openUser(user = null) {
     ));
   }
 
+  currentDialogUser = user;
+  const everyInstitute = !user || !user.institutes || user.institutes === '*';
+  $('uAllInst').checked = everyInstitute;
+  $('uInstWrap').hidden = everyInstitute;
+  if (!everyInstitute) renderInstitutes(user);
+  else $('uInstPanels').replaceChildren();
+
   $('userForm').dataset.id = user?.id ?? '';
   $('userDialog').showModal();
 }
 
-$('uAll').addEventListener('change', (e) => { $('uPanelsWrap').hidden = e.target.checked; });
+/* ── institute picker ───────────────────────────────────────────────── */
+
+const instituteCache = new Map(); // panelId -> [{id,name}] | Error
+
+async function institutesFor(panelId) {
+  if (instituteCache.has(panelId)) return instituteCache.get(panelId);
+  try {
+    const { institutes } = await api(`/gw/admin/panels/${panelId}/institutes`);
+    instituteCache.set(panelId, institutes);
+    return institutes;
+  } catch (err) {
+    instituteCache.set(panelId, err);
+    return err;
+  }
+}
+
+// Which panels this person can reach, given what is ticked right now — the
+// institute list has to follow the panel ticks, not the saved record.
+function selectedPanels() {
+  if ($('uAll').checked) return PANELS;
+  const ids = new Set([...$('uPanels').querySelectorAll('input:checked')].map((i) => i.value));
+  return PANELS.filter((p) => ids.has(p.id));
+}
+
+function renderInstituteGroup(panel, assigned) {
+  const list = el('div', { class: 'inst-list' }, el('span', { class: 'inst-empty', text: 'Loading…' }));
+  const count = el('span', { class: 'count' });
+
+  const allBox = el('input', {
+    type: 'checkbox',
+    checked: assigned === '*' || assigned === undefined,
+    onChange: (e) => {
+      for (const box of list.querySelectorAll('input')) box.disabled = e.target.checked;
+      updateCount();
+    },
+  });
+
+  // These accounts carry a hundred-plus institutes; picking three out of a
+  // scrolling list without a filter is miserable.
+  const filter = el('input', {
+    type: 'search', placeholder: 'Filter institutes…',
+    onInput: (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      for (const row of list.querySelectorAll('label')) {
+        row.hidden = Boolean(q) && !row.textContent.toLowerCase().includes(q);
+      }
+    },
+  });
+
+  const clear = el('button', {
+    type: 'button', class: 'sm ghost',
+    onClick: () => {
+      for (const box of list.querySelectorAll('input')) box.checked = false;
+      updateCount();
+    },
+  }, 'Clear');
+
+  const tools = el('div', { class: 'inst-tools' }, filter, clear);
+
+  const group = el('div', { class: 'inst-group', dataset: { panel: panel.id } },
+    el('div', { class: 'inst-head' },
+      el('label', { class: 'check', style: 'margin:0' }, allBox, el('span', { text: panel.label })),
+      count),
+    tools,
+    list);
+
+  // The filter is pointless while "all" is ticked, since nothing is selectable.
+  function syncTools() { tools.hidden = allBox.checked; }
+  allBox.addEventListener('change', syncTools);
+  syncTools();
+
+  function updateCount() {
+    const boxes = [...list.querySelectorAll('input')];
+    if (allBox.checked) count.textContent = `all ${boxes.length || ''}`.trim();
+    else count.textContent = `${boxes.filter((b) => b.checked).length} of ${boxes.length}`;
+  }
+
+  institutesFor(panel.id).then((institutes) => {
+    list.replaceChildren();
+    if (institutes instanceof Error) {
+      list.append(el('span', { class: 'inst-empty', text: `Could not load: ${institutes.message}` }));
+      count.textContent = '';
+      return;
+    }
+    if (institutes.length === 0) {
+      list.append(el('span', { class: 'inst-empty', text: 'This panel reports no institutes.' }));
+      return;
+    }
+    const chosen = new Set(Array.isArray(assigned) ? assigned.map(String) : []);
+    for (const inst of institutes) {
+      list.append(el('label', { class: 'check' },
+        el('input', {
+          type: 'checkbox', value: inst.id, disabled: allBox.checked,
+          checked: chosen.has(String(inst.id)), onChange: updateCount,
+        }),
+        el('span', { text: inst.name }),
+      ));
+    }
+    updateCount();
+  });
+
+  return group;
+}
+
+function renderInstitutes(user) {
+  const host = $('uInstPanels');
+  host.replaceChildren();
+  const panels = selectedPanels();
+
+  if (panels.length === 0) {
+    host.append(el('div', { class: 'inst-empty', text: 'Choose at least one panel first.' }));
+    return;
+  }
+  const scope = user?.institutes;
+  for (const panel of panels) {
+    const assigned = !scope || scope === '*' ? '*' : scope[panel.id];
+    host.append(renderInstituteGroup(panel, assigned));
+  }
+}
+
+function collectInstitutes() {
+  if ($('uAllInst').checked) return '*';
+  const out = {};
+  for (const group of $('uInstPanels').querySelectorAll('.inst-group')) {
+    const panelId = group.dataset.panel;
+    const allBox = group.querySelector('.inst-head input');
+    if (allBox.checked) { out[panelId] = '*'; continue; }
+    out[panelId] = [...group.querySelectorAll('.inst-list input:checked')].map((i) => i.value);
+  }
+  return out;
+}
+
+$('uAllInst').addEventListener('change', (e) => {
+  $('uInstWrap').hidden = e.target.checked;
+  if (!e.target.checked) renderInstitutes(currentDialogUser);
+});
+
+$('uAll').addEventListener('change', (e) => {
+  $('uPanelsWrap').hidden = e.target.checked;
+  if (!$('uAllInst').checked) renderInstitutes(currentDialogUser);
+});
 $('uRole').addEventListener('change', (e) => {
   // Admins always keep export rights; showing the box unticked would be a lie.
   const isAdmin = e.target.value === 'admin';
@@ -307,7 +474,13 @@ $('userForm').addEventListener('submit', async (event) => {
   $('userError').textContent = '';
   const id = $('userForm').dataset.id;
   const panels = $('uAll').checked ? '*' : [...$('uPanels').querySelectorAll('input:checked')].map((i) => i.value);
-  const payload = { name: $('uName').value, role: $('uRole').value, canExport: $('uExport').checked, panels };
+  const payload = {
+    name: $('uName').value,
+    role: $('uRole').value,
+    canExport: $('uExport').checked,
+    panels,
+    institutes: collectInstitutes(),
+  };
 
   $('uSave').disabled = true;
   try {

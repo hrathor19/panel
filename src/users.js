@@ -9,7 +9,7 @@ export const MIN_PASSWORD = 10;
 // Users predate panels and roles were viewer/admin. Bring old records forward
 // on read so an existing install keeps working without manual editing.
 function migrate(user) {
-  const base = { canExport: false, panels: ALL_PANELS, lastLoginAt: null, lastLoginIp: null, ...user };
+  const base = { canExport: false, panels: ALL_PANELS, institutes: ALL_PANELS, lastLoginAt: null, lastLoginIp: null, ...user };
   if (user.role === 'viewer') return { ...base, role: 'user', canExport: false };
   if (user.role === 'admin') return { ...base, canExport: true };
   return base;
@@ -39,7 +39,7 @@ export function validatePassword(password) {
   return password;
 }
 
-export async function addUser({ email, password, name, role = 'user', canExport = false, panels = ALL_PANELS }) {
+export async function addUser({ email, password, name, role = 'user', canExport = false, panels = ALL_PANELS, institutes = ALL_PANELS }) {
   const users = await listUsers();
   const normalised = String(email ?? '').trim().toLowerCase();
 
@@ -55,6 +55,8 @@ export async function addUser({ email, password, name, role = 'user', canExport 
     role,
     canExport: role === 'admin' ? true : Boolean(canExport),
     panels,
+    // '*' or { panelId: '*' | [instituteId, ...] } — see institutes.js
+    institutes,
     passwordHash: bcrypt.hashSync(password, 12),
     active: true,
     lastLoginAt: null,
@@ -83,6 +85,7 @@ export async function updateUser(id, patch) {
     user.active = Boolean(patch.active);
   }
   if (patch.panels !== undefined) user.panels = patch.panels;
+  if (patch.institutes !== undefined) user.institutes = patch.institutes;
   if (patch.password) {
     validatePassword(patch.password);
     user.passwordHash = bcrypt.hashSync(patch.password, 12);

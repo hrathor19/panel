@@ -4,8 +4,9 @@ import {
   listUsers, addUser, updateUser, deleteUser, findUserById, publicUser, ALL_PANELS, MIN_PASSWORD,
 } from '../users.js';
 import { listPanels, addPanel, updatePanel, deletePanel, findPanel } from '../panels.js';
-import { login, sessionState, forgetPanel } from '../npf-session.js';
-import { forgetConstants } from '../npf-config.js';
+import { login, sessionState, forgetPanel, getToken, refreshToken } from '../npf-session.js';
+import { BROWSER_HEADERS } from '../upstream-headers.js';
+import { getNpfConstants, forgetConstants } from '../npf-config.js';
 import { clearPanelCaches } from './panel.js';
 import { storage } from '../storage.js';
 import * as sessions from '../sessions.js';
@@ -76,9 +77,13 @@ adminRouter.get('/users', handle(async (req, res) => {
 }));
 
 adminRouter.post('/users', handle(async (req, res) => {
-  const { email, name, role, canExport, panels } = req.body ?? {};
+  const { email, name, role, canExport, panels, institutes } = req.body ?? {};
   const password = req.body?.password?.trim() || generatePassword();
-  const user = await addUser({ email, name, role, canExport, panels: panels ?? ALL_PANELS, password });
+  const user = await addUser({
+    email, name, role, canExport, password,
+    panels: panels ?? ALL_PANELS,
+    institutes: institutes ?? ALL_PANELS,
+  });
   audit({ event: 'admin-user-added', by: req.session.email, user: user.email, role: user.role });
   // The only moment the password is visible — it is a bcrypt hash after this.
   res.json({ user: publicUser(user), password });
@@ -101,7 +106,7 @@ adminRouter.patch('/users/:id', handle(async (req, res) => {
   const user = await updateUser(req.params.id, patch);
   // A disabled account, a changed password or revoked panel access should take
   // hold now, not whenever the person next signs in.
-  if (patch.password || patch.active === false || patch.panels !== undefined || patch.role) {
+  if (patch.password || patch.active === false || patch.panels !== undefined || patch.institutes !== undefined || patch.role) {
     await sessions.revokeUser(user.id);
   }
   audit({ event: 'admin-user-updated', by: req.session.email, user: user.email, fields: Object.keys(req.body ?? {}) });
@@ -169,6 +174,51 @@ adminRouter.post('/panels/:id/test', handle(async (req, res) => {
     audit({ event: 'admin-panel-test', by: req.session.email, panel: panel.slug, result: 'failed', detail: err.message });
     res.json({ ok: false, message: err.message, detail: err.detail ?? null });
   }
+}));
+
+// The institutes a panel's shared account can see, read live from the panel so
+// the admin ticks real options rather than ids typed from memory.
+adminRouter.get('/panels/:id/institutes', handle(async (req, res) => {
+  const panel = await findPanel(req.params.id);
+  if (!panel) throw new Error('no such panel');
+
+  const npf = await getNpfConstants(panel.origin);
+
+  async function fetchList(token) {
+    return fetch(`${npf.apiOrigin}/publishers/v1/collegeList/`, {
+      headers: {
+        ...BROWSER_HEADERS,
+        Origin: panel.origin,
+        Referer: `${panel.origin}/`,
+        'access-key': npf.accessKey,
+        environment: npf.environment,
+        'access-token': token,
+      },
+    });
+  }
+
+  let token = await getToken(panel);
+  let upstream = await fetchList(token);
+  let payload = await upstream.json().catch(() => null);
+
+  // The shared token expires on its own schedule; one quiet retry beats making
+  // an admin wonder why the list is empty.
+  if (upstream.status === 401 || payload?.status !== 1) {
+    token = await refreshToken(panel, token);
+    upstream = await fetchList(token);
+    payload = await upstream.json().catch(() => null);
+  }
+
+  if (payload?.status !== 1) {
+    throw new Error(payload?.message || `panel returned HTTP ${upstream.status}`);
+  }
+
+  const colleges = payload?.data?.colleges ?? {};
+  const institutes = Object.entries(colleges)
+    .map(([id, name]) => ({ id: String(id), name: String(name) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  res.json({ panel: { id: panel.id, slug: panel.slug, label: panel.label }, institutes });
 }));
 
 /* ── live sessions ───────────────────────────────────────────────────── */
