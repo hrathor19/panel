@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakePanel } from './fake-panel.mjs';
+import { readFileSync as readFile } from 'node:fs';
 import { encryptPayload } from '../src/npf-crypto.js';
 
 const GW = 8190;
@@ -613,6 +614,38 @@ try {
 
   secure.kill();
   rmSync(secureDir, { recursive: true, force: true });
+
+
+  /* ── stylesheet guards ──────────────────────────────────────────── */
+  section('stylesheet guards');
+
+  // A closed <dialog> is hidden by the browser's own stylesheet, and author
+  // styles beat it. Setting display on the dialog itself without [open] makes
+  // it render inline on every page — which is exactly what happened once.
+  const sheet = readFile('views/assets/app.css', 'utf8');
+  const offenders = [];
+  for (const [, selector, body] of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const part of selector.split(',')) {
+      const sel = part.trim();
+      if (!sel.startsWith('dialog')) continue;
+      // Only the dialog itself matters; a descendant inside a hidden dialog is fine.
+      const subject = sel.split(/[\s>+~]/)[0];
+      if (subject !== sel) continue;
+      if (!/(^|[^-])display\s*:/.test(body)) continue;
+      if (!sel.includes('[open]')) offenders.push(sel);
+    }
+  }
+  t('no dialog sets display without [open]', offenders.length === 0, offenders.join(', '));
+  t('closed dialogs are explicitly hidden', /dialog:not\(\[open\]\)\s*\{[^}]*display\s*:\s*none/.test(sheet));
+
+  // Both themes have to define every token, or one of them falls back to
+  // whatever the other happened to set.
+  const lightBlock = sheet.slice(sheet.indexOf(':root,'), sheet.indexOf(':root[data-theme="dark"]'));
+  const darkBlock = sheet.slice(sheet.indexOf(':root[data-theme="dark"]'), sheet.indexOf('* { box-sizing'));
+  const names = (block) => new Set([...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+  const missing = [...names(lightBlock)].filter((n) => !names(darkBlock).has(n));
+  t('dark theme defines every light token', missing.length === 0, missing.join(', '));
+  t('light is the default theme', sheet.indexOf(':root,') < sheet.indexOf('[data-theme="dark"]'));
 
 } catch (err) {
   fail += 1;

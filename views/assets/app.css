@@ -390,7 +390,12 @@ dialog .d-foot {
   display: flex; justify-content: flex-end; gap: 9px; padding: 15px 22px;
   border-top: 1px solid var(--border); background: var(--surface-2);
 }
-dialog.tall { display: flex; flex-direction: column; max-height: min(88vh, 880px); width: min(680px, calc(100vw - 28px)); }
+/* A closed <dialog> is hidden by the browser's own stylesheet, but author
+   styles beat that stylesheet — so any display here MUST be qualified with
+   [open], or the dialog renders inline on every page. */
+dialog:not([open]) { display: none; }
+dialog.tall[open] { display: flex; flex-direction: column; }
+dialog.tall { max-height: min(88vh, 880px); width: min(680px, calc(100vw - 28px)); }
 dialog.tall > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 dialog.tall .d-head, dialog.tall .d-foot { flex: none; }
 dialog.tall .d-body { flex: 1 1 auto; min-height: 0; }
