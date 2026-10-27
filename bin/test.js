@@ -653,6 +653,30 @@ try {
   t('dark theme defines every light token', missing.length === 0, missing.join(', '));
   t('light is the default theme', sheet.indexOf(':root,') < sheet.indexOf('[data-theme="dark"]'));
 
+  /* ── a panel that cannot be reached ─────────────────────────────── */
+  // Added last so it does not disturb the panel counts the sections above
+  // assert on. Nothing listens on 8199.
+  section('unreachable panel');
+  const dead = (await (await admin('/gw/admin/panels', {
+    method: 'POST',
+    json: { label: 'Offline', url: 'http://127.0.0.1:8199', username: 'ops@x.com', password: 'whatever12' },
+  })).json()).panel;
+
+  const deadRes = await admin(`/p/${dead.slug}/`);
+  const deadBody = await deadRes.text();
+  t('an unreachable panel answers 502', deadRes.status === 502);
+  t('the 502 is a page, not a blank "Bad Gateway"', /<html/i.test(deadBody));
+  t('the page names the panel', deadBody.includes('Offline could not be opened'));
+  t('an admin is told how to diagnose it', deadBody.includes(`npm run reach -- ${dead.slug}`));
+
+  const deadForUser = await (await exporter(`/p/${dead.slug}/`)).text();
+  t('a plain user is not shown the internal reason', !deadForUser.includes('npm run reach'));
+  t('a plain user still gets a readable page', deadForUser.includes('could not be opened'));
+
+  const deadAsset = await admin(`/p/${dead.slug}/main.abc123.js`);
+  t('a failed asset stays a bare 502, not a page of HTML', deadAsset.status === 502 && !/<html/i.test(await deadAsset.text()));
+
+  await admin(`/gw/admin/panels/${dead.id}`, { method: 'DELETE' });
 
   /* ── capture mode and addresses ─────────────────────────────────── */
   section('capture mode and addresses');

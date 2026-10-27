@@ -11,7 +11,8 @@
     "userlist": "node bin/useradd.js --list",
     "passwd": "node bin/useradd.js --reset",
     "test": "node bin/test.js",
-    "doctor": "node bin/doctor.js"
+    "doctor": "node bin/doctor.js",
+    "reach": "node bin/reach.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

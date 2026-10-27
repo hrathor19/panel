@@ -308,10 +308,56 @@ panelRouter.use(async (req, res) => {
     if (!isAsset) return await serveIndex(req, res);
     return await serveAsset(req, res);
   } catch (err) {
-    console.error(`[panel:${req.panel.slug}] ${req.path} failed:`, err.message);
-    return res.sendStatus(502);
+    // Node reports every outbound failure as "fetch failed" and puts the real
+    // reason one level down, so log both or the line says nothing.
+    const cause = err.cause?.code ?? err.cause?.message;
+    console.error(`[panel:${req.panel.slug}] ${req.path} failed: ${err.message}${cause ? ` (${cause})` : ''}`);
+    // An asset gets the bare status — a broken script should not be handed a
+    // page of HTML. Only the document someone is looking at explains itself.
+    if (isAsset) return res.sendStatus(502);
+    return res.status(502).type('html').send(unreachablePage(req, err, cause));
   }
 });
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+}
+
+// "Bad Gateway" on a blank page tells the person nothing and the administrator
+// no more. The reason goes only to admins: it names internal hosts.
+function unreachablePage(req, err, cause) {
+  const detail = req.gwUser?.role === 'admin'
+    ? `<p class="detail">${escapeHtml(err.message)}${cause ? ` <code>${escapeHtml(cause)}</code>` : ''}</p>
+       <p class="detail">Run <code>npm run reach -- ${escapeHtml(req.panel.slug)}</code> on the server to find out why.</p>`
+    : '<p class="detail">If it keeps happening, tell your administrator which panel you were opening.</p>';
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(req.panel.label)} is unavailable</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#656d76; --line:#e3e6ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa4af; --line:#2c3238; }
+  }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--ink);
+         font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px 32px;
+          max-width:460px; width:100%; }
+  h1 { margin:0 0 10px; font-size:19px; }
+  p { margin:0 0 10px; }
+  .detail { color:var(--muted); font-size:13px; }
+  code { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;
+         background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+  a { color:inherit; }
+</style></head>
+<body><main class="card">
+  <h1>${escapeHtml(req.panel.label)} could not be opened</h1>
+  <p>The gateway is running, but it could not reach the panel just now. Nothing has been lost — try again in a moment.</p>
+  ${detail}
+  <p class="detail"><a href="/panels">Back to your panels</a></p>
+</main></body></html>`;
+}
 
 async function serveAsset(req, res) {
   const key = `${req.panel.id}:${req.path}`;
