@@ -12,7 +12,7 @@ import { storage } from '../storage.js';
 import * as sessions from '../sessions.js';
 import { audit, recentAudit } from '../audit.js';
 import { readHistory, RISK_LABELS } from '../login-history.js';
-import { describePlace } from '../geo.js';
+import { describePlace, prettyTimezone } from '../geo.js';
 import { requireAdmin } from './auth.js';
 
 export const adminRouter = express.Router();
@@ -230,7 +230,17 @@ adminRouter.get('/sessions', handle(async (req, res) => {
   res.json({
     sessions: live
       .map(({ id, email, name, role, ip, userAgent, device, place, location, flags, createdAt }) => ({
-        id, email, name, role, ip, userAgent, device, place, location,
+        id, email, name, role, ip, place,
+        device: device ? { ...device, timezone: prettyTimezone(device.timezone) } : null,
+        location: location?.status === 'granted'
+          ? {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              accuracyM: location.accuracyM ?? null,
+              address: location.place?.short ?? null,
+              fullAddress: location.place?.label ?? null,
+            }
+          : { status: location?.status ?? 'missing' },
         flags: flags ?? [],
         createdAt,
         current: id === req.session.id,
@@ -261,9 +271,15 @@ adminRouter.get('/logins', handle(async (req, res) => {
       device: e.device?.label ?? null,
       kind: e.device?.kind ?? null,
       screen: e.device?.screen ?? null,
-      timezone: e.device?.timezone ?? null,
+      timezone: prettyTimezone(e.device?.timezone),
       location: e.location?.status === 'granted'
-        ? { latitude: e.location.latitude, longitude: e.location.longitude, accuracyM: e.location.accuracyM }
+        ? {
+            latitude: e.location.latitude,
+            longitude: e.location.longitude,
+            accuracyM: e.location.accuracyM,
+            address: e.location.place?.short ?? null,
+            fullAddress: e.location.place?.label ?? null,
+          }
         : { status: e.location?.status ?? 'missing' },
       locationGapKm: e.locationGapKm ?? null,
       travel: e.travel ?? null,
@@ -274,7 +290,7 @@ adminRouter.get('/logins', handle(async (req, res) => {
 
 adminRouter.get('/logins.csv', handle(async (req, res) => {
   const entries = await readHistory(Number(req.query.limit) || 5000);
-  const columns = ['at', 'email', 'outcome', 'ip', 'place', 'network', 'device', 'screen', 'timezone', 'latitude', 'longitude', 'accuracyM', 'flags'];
+  const columns = ['at', 'email', 'outcome', 'ip', 'place', 'network', 'device', 'screen', 'timezone', 'latitude', 'longitude', 'accuracyM', 'address', 'flags'];
   const escape = (v) => {
     const t = v === undefined || v === null ? '' : String(v);
     return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
@@ -283,6 +299,7 @@ adminRouter.get('/logins.csv', handle(async (req, res) => {
     e.at, e.email, e.outcome, e.ip, describePlace(e.ipPlace), e.ipPlace?.network,
     e.device?.label, e.device?.screen, e.device?.timezone,
     e.location?.latitude, e.location?.longitude, e.location?.accuracyM,
+    e.location?.place?.label,
     (e.flags ?? []).join(' '),
   ].map(escape).join(','));
   res.type('text/csv')

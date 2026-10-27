@@ -7,7 +7,7 @@ import * as sessions from '../sessions.js';
 import { audit } from '../audit.js';
 import { checkLoginAllowed, clearLoginAttempts } from '../rate-limit.js';
 import { describeDevice, deviceFingerprint } from '../device.js';
-import { lookupIp, describePlace } from '../geo.js';
+import { lookupIp, describePlace, reverseGeocode } from '../geo.js';
 import { recordLogin, historyFor, assessRisk } from '../login-history.js';
 
 export const COOKIE = sessions.COOKIE;
@@ -85,7 +85,15 @@ async function gatherContext(req, location) {
     language: (req.get('accept-language') ?? '').split(',')[0].slice(0, 16) || null,
   };
 
-  return { ip: req.ip, device, ipPlace: await lookupIp(req.ip), location: cleanLocation(location) };
+  const position = cleanLocation(location);
+  // Both lookups are best-effort and run together; neither may delay a sign-in.
+  const [ipPlace, address] = await Promise.all([
+    lookupIp(req.ip),
+    position.status === 'granted' ? reverseGeocode(position.latitude, position.longitude) : null,
+  ]);
+  if (address) position.place = address;
+
+  return { ip: req.ip, device, ipPlace, location: position };
 }
 
 // Only the fields we expect, coerced — this came from a browser.
@@ -111,7 +119,7 @@ function cleanLocation(location) {
 // Told to the login page before it asks for anything, so a permission prompt
 // only appears where it is actually needed.
 authRouter.get('/requirements', (req, res) => {
-  res.json({ location: config.requireLocation });
+  res.json({ mode: config.locationMode, location: config.locationMode === 'require' });
 });
 
 authRouter.post('/login', async (req, res) => {
@@ -142,7 +150,7 @@ authRouter.post('/login', async (req, res) => {
   const context = await gatherContext(req, location);
   const prior = await historyFor(user.id, 300);
 
-  if (config.requireLocation && context.location.status !== 'granted') {
+  if (config.locationMode === 'require' && context.location.status !== 'granted') {
     const refused = context.location.status === 'denied';
     audit({ event: 'login-location-blocked', user: user.email, status: context.location.status, ip: req.ip });
     await recordLogin({

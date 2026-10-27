@@ -49,16 +49,20 @@ if (config) {
   // The combination that locks everyone out: browser geolocation is refused
   // outright on a page that is not a secure context, so nobody can satisfy the
   // requirement no matter what they click.
-  if (config.requireLocation && !config.secureCookies) {
-    fail(
-      'REQUIRE_LOCATION is on but the gateway is not served over HTTPS',
-      'Browsers refuse geolocation on plain HTTP (except localhost), so every sign-in will fail. '
-      + 'Finish the TLS setup and set TRUST_PROXY=1, or set REQUIRE_LOCATION=0 for now.',
-    );
-  } else if (config.requireLocation) {
+  if (config.locationMode !== 'off' && !config.secureCookies) {
+    const breaks = config.locationMode === 'require';
+    const message = `LOCATION_MODE is "${config.locationMode}" but the gateway is not served over HTTPS`;
+    const how = 'Browsers refuse geolocation outside a secure context, so no coordinates will ever be recorded. '
+      + 'Serve the gateway over HTTPS and set TRUST_PROXY=1.';
+    // "require" is worse than useless without TLS — nobody can sign in at all.
+    if (breaks) fail(`${message}, so every sign-in will fail`, `${how} Until then set LOCATION_MODE=off.`);
+    else warn(message, how);
+  } else if (config.locationMode === 'require') {
     ok('location is required at sign-in');
+  } else if (config.locationMode === 'capture') {
+    ok('location is recorded at sign-in, but not required');
   } else {
-    notes.push('location is not required at sign-in (REQUIRE_LOCATION=0)');
+    notes.push('location is not collected at sign-in (LOCATION_MODE=off)');
   }
 
   if (config.seed.password) {

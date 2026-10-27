@@ -72,6 +72,42 @@ $('secretCopy').addEventListener('click', () => copy($('secretValue').textConten
 
 const hostOf = (origin) => { try { return new URL(origin).host; } catch { return origin; } };
 
+// Where someone actually was, as opposed to what their clock is set to.
+// Those are different things and were being shown as if they were the same.
+function whereCell({ location, place, ip, timezone }) {
+  const lines = [];
+
+  if (location?.latitude != null) {
+    if (location.address) lines.push(el('strong', { text: location.address, title: location.fullAddress ?? '' }));
+    else if (place && place !== 'Unknown') lines.push(el('strong', { text: place }));
+
+    lines.push(el('small', {},
+      el('a', {
+        href: `https://www.google.com/maps?q=${location.latitude},${location.longitude}`,
+        target: '_blank', rel: 'noopener', class: 'mono',
+      }, `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`),
+      location.accuracyM ? el('span', { class: 'muted', text: `  ±${location.accuracyM} m` }) : null));
+  } else {
+    lines.push(el('strong', { text: place && place !== 'Unknown' ? place : 'Unknown' }));
+    lines.push(el('small', { class: 'muted', text: NO_LOCATION_REASON[location?.status] ?? 'No coordinates recorded' }));
+  }
+
+  if (ip) lines.push(el('small', { class: 'mono muted', text: ip }));
+  // Labelled, because an IANA id on its own reads like a place name.
+  if (timezone) lines.push(el('small', { class: 'muted', text: `Device clock · ${timezone}` }));
+
+  return el('div', { class: 'stack' }, ...lines);
+}
+
+const NO_LOCATION_REASON = {
+  skipped: 'Location not requested',
+  denied: 'Location refused by the person',
+  timeout: 'Location timed out',
+  unavailable: 'Location unavailable',
+  invalid: 'Location reported but invalid',
+  missing: 'No coordinates recorded',
+};
+
 /* ── overview ───────────────────────────────────────────────────────── */
 
 async function renderOverview(view) {
@@ -646,11 +682,10 @@ async function renderSessions(view) {
             el('strong', {}, s.name, s.current ? ' ' : null, s.current ? badge('This device', 'accent') : null),
             el('small', { text: s.email })))),
         cell('Signed in', el('span', { title: exactly(s.createdAt), text: when(s.createdAt) })),
-        cell('Where', el('div', { class: 'stack' },
-          el('span', { text: s.place ?? '—' }), el('small', { class: 'mono', text: s.ip ?? '' }))),
+        cell('Where', whereCell({ location: s.location, place: s.place, ip: s.ip, timezone: s.device?.timezone })),
         cell('Device', el('div', { class: 'stack' },
           el('span', { text: s.device?.label ?? '—' }),
-          el('small', { text: [s.device?.kind, s.device?.timezone].filter(Boolean).join(' · ') }))),
+          el('small', { text: [s.device?.kind, s.device?.screen].filter(Boolean).join(' · ') }))),
         cell('Status', (s.flags ?? []).length
           ? el('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
               ...s.flags.map((f) => tag(f.replace(/-/g, ' '), FLAG_TONE[f] ?? '')))
@@ -730,19 +765,13 @@ async function renderSignins(view) {
       return;
     }
     for (const e of rows.slice(0, 300)) {
-      const coords = e.location?.latitude != null
-        ? el('a', { href: `https://www.google.com/maps?q=${e.location.latitude},${e.location.longitude}`, target: '_blank', rel: 'noopener', class: 'mono',
-            title: `Reported by the browser, accurate to about ${e.location.accuracyM ?? '?'} m` },
-          `${e.location.latitude.toFixed(3)}, ${e.location.longitude.toFixed(3)}`)
-        : el('span', { class: 'muted', text: e.location?.status ?? 'none' });
-
       tbody.append(el('tr', {},
         cell('When', el('span', { class: 'nowrap', title: exactly(e.at), text: when(e.at) })),
         cell('Person', el('div', { class: 'stack' }, el('strong', { text: e.email ?? '—' }), el('small', { class: 'mono', text: e.ip ?? '' }))),
         cell('Outcome', badge(OUTCOME_LABEL[e.outcome] ?? e.outcome, OUTCOME_TONE[e.outcome] ?? '')),
-        cell('Where', el('div', { class: 'stack' }, el('span', { text: e.place }), el('small', {}, coords))),
+        cell('Where', whereCell({ location: e.location, place: e.place, ip: null, timezone: e.timezone })),
         cell('Device', el('div', { class: 'stack' }, el('span', { text: e.device ?? '—' }),
-          el('small', { text: [e.kind, e.screen, e.timezone].filter(Boolean).join(' · ') }))),
+          el('small', { text: [e.kind, e.screen].filter(Boolean).join(' · ') }))),
         cell('Flags', el('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
           ...(e.flags ?? []).map((f) => {
             const extra = f === 'impossible-travel' && e.travel ? ` (${e.travel.km} km in ${e.travel.hours} h)`

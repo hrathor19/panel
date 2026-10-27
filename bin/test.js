@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakePanel } from './fake-panel.mjs';
 import { readFileSync as readFile } from 'node:fs';
+import { createServer } from 'node:http';
 import { encryptPayload } from '../src/npf-crypto.js';
 
 const GW = 8190;
@@ -284,7 +285,12 @@ try {
   const { sessions: live } = await (await admin('/gw/admin/sessions')).json();
   t('admin can see who is signed in', live.length >= 2);
   t('the admin\'s own session is marked', live.some((s) => s.current));
-  t('sessions carry an IP and device', live.every((s) => 'ip' in s && 'userAgent' in s));
+  t('sessions carry an IP and a parsed device', live.every((s) => 'ip' in s && 'device' in s));
+  t('sessions carry a location field even when none was given', live.every((s) => 'location' in s));
+  t('the raw user agent is still kept on the device', live.every((s) => !s.device || 'userAgent' in s.device));
+  // The clock is not a place; the two are reported separately now.
+  t('the device timezone is normalised for display',
+    live.every((s) => !s.device?.timezone || !s.device.timezone.includes('Calcutta')));
 
   const victim = live.find((s) => s.email === 'self@test.local');
   await admin(`/gw/admin/sessions/${victim.id}`, { method: 'DELETE' });
@@ -646,6 +652,91 @@ try {
   const missing = [...names(lightBlock)].filter((n) => !names(darkBlock).has(n));
   t('dark theme defines every light token', missing.length === 0, missing.join(', '));
   t('light is the default theme', sheet.indexOf(':root,') < sheet.indexOf('[data-theme="dark"]'));
+
+
+  /* ── capture mode and addresses ─────────────────────────────────── */
+  section('capture mode and addresses');
+
+  // Stand in for the geocoder so the suite never calls a public service.
+  const geocoder = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      display_name: 'KollegeApply, Sector 62, Noida, Gautam Buddha Nagar, Uttar Pradesh, 201309, India',
+      address: { road: 'Sector 62', city: 'Noida', state: 'Uttar Pradesh', postcode: '201309', country: 'India' },
+    }));
+  });
+  await new Promise((r) => geocoder.listen(8194, r));
+
+  const CAP = 8195;
+  const capDir = mkdtempSync(join(tmpdir(), 'npf-gw-cap-'));
+  const capture = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env, GW_DATA_DIR: capDir, PORT: String(CAP),
+      SESSION_SECRET: 'cap-secret-'.padEnd(64, 'z'),
+      ADMIN_EMAIL: 'cap@test.local', ADMIN_PASSWORD: 'cap-password-123',
+      LOCATION_MODE: 'capture', REQUIRE_LOCATION: '', GEO_LOOKUP: '0',
+      REVERSE_GEOCODE: '1', REVERSE_GEOCODE_URL: 'http://localhost:8194/reverse?lat={lat}&lon={lon}',
+      NPF_EMAIL: '', NPF_PASSWORD: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  capture.stdout.on('data', () => {});
+  capture.stderr.on('data', () => {});
+
+  const CAP_BASE = `http://localhost:${CAP}`;
+  for (let i = 0; i < 60; i += 1) {
+    try { if ((await fetch(`${CAP_BASE}/gw/health`)).ok) break; } catch { /* starting */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const capCreds = { email: 'cap@test.local', password: 'cap-password-123' };
+  const capReq = await (await fetch(`${CAP_BASE}/gw/auth/requirements`)).json();
+  t('capture mode is announced to the login page', capReq.mode === 'capture');
+  t('capture mode does not mark location as required', capReq.location === false);
+
+  const refused = client(CAP_BASE);
+  const refusedRes = await refused('/gw/auth/login', { method: 'POST', json: { ...capCreds, location: { status: 'denied' } } });
+  t('a refused location still signs in under capture', refusedRes.status === 200);
+
+  // The admin signs in first so the detailed sign-in below is the newest one;
+  // history comes back newest-first and both share these coordinates.
+  const capAdmin = client(CAP_BASE);
+  await capAdmin('/gw/auth/login', { method: 'POST', json: { ...capCreds, location: { status: 'granted', latitude: 19.076, longitude: 72.8777 } } });
+
+  const located = client(CAP_BASE);
+  await located('/gw/auth/login', {
+    method: 'POST',
+    headers: { 'User-Agent': UA_MAC },
+    json: {
+      ...capCreds,
+      location: { status: 'granted', latitude: 28.6274, longitude: 77.3716, accuracy: 18 },
+      client: { screen: '1792x1120', timezone: 'Asia/Calcutta' },
+    },
+  });
+
+  const capLogins = (await (await capAdmin('/gw/admin/logins?limit=50')).json()).entries;
+  const withCoords = capLogins.find((e) => e.location?.latitude === 28.6274);
+
+  t('coordinates are recorded', withCoords?.location?.longitude === 77.3716);
+  t('accuracy is recorded', withCoords.location.accuracyM === 18);
+  t('coordinates are resolved to a short address', withCoords.location.address === 'Sector 62, Noida');
+  t('the full address is kept too', /Uttar Pradesh/.test(withCoords.location.fullAddress));
+  t('Asia/Calcutta is shown as Asia/Kolkata', withCoords.timezone === 'Asia/Kolkata');
+
+  const capSessions = (await (await capAdmin('/gw/admin/sessions')).json()).sessions;
+  t('live sessions carry coordinates', capSessions.some((x) => x.location?.latitude === 28.6274));
+  t('live sessions carry the address', capSessions.some((x) => x.location?.address === 'Sector 62, Noida'));
+
+  const capCsv = await (await capAdmin('/gw/admin/logins.csv')).text();
+  t('the CSV has an address column', capCsv.split('\n')[0].includes('address'));
+  t('the CSV carries the coordinates', capCsv.includes('28.6274'));
+
+  const refusedRow = capLogins.find((e) => e.location?.status === 'denied');
+  t('a refusal is recorded as such, not as a blank', Boolean(refusedRow));
+
+  capture.kill();
+  geocoder.close();
+  rmSync(capDir, { recursive: true, force: true });
 
 } catch (err) {
   fail += 1;

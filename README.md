@@ -84,16 +84,35 @@ Disabling, deleting, resetting a password or changing panel access takes effect
 Every sign-in attempt is recorded with where it came from, on what, and whether
 anything about it looks unusual. Admin → Sign-ins.
 
-**Requiring a location.** With `REQUIRE_LOCATION=1` the login page asks the
-browser for a position and the server refuses to sign anyone in without one.
-A refused prompt gives a clear message and is itself recorded.
+**`LOCATION_MODE`** decides what happens at sign-in:
+
+| Mode | Behaviour |
+|---|---|
+| `off` | never ask |
+| `capture` | ask and record, but let people in either way |
+| `require` | refuse the sign-in without one |
+
+`capture` is usually what you want: you get the coordinates without a denied
+prompt locking anybody out.
+
+**Coordinates are resolved to an address.** A latitude and longitude only
+answers "where" if you paste it into a map, so the reported position is
+reverse-geocoded and both are kept — "Sector 62, Noida" in the list, the exact
+numbers and a map link beneath it. `REVERSE_GEOCODE=0` turns that off if you
+would rather the coordinates did not go to a geocoder.
+
+**A timezone is not a location.** The device clock (`Asia/Kolkata`) is recorded
+and shown, but labelled as the clock and kept separate from where someone was.
+IANA still uses the legacy spelling `Asia/Calcutta`, which reads like a place
+name in a list, so it is normalised for display.
 
 Two things to be honest about:
 
 - **It needs HTTPS.** Geolocation is a secure-context API. Over plain HTTP on
   anything but `localhost` the browser refuses it outright, and no amount of
-  clicking Allow helps. `npm run doctor` fails if you turn this on without TLS,
-  because the combination locks everyone out.
+  clicking Allow helps — so over a LAN address no coordinates are ever
+  recorded, whatever the mode says. `npm run doctor` warns on `capture` without
+  TLS and fails on `require`, since that combination locks everyone out.
 - **A reported position can be faked.** Browser devtools have a location
   override. Treat it as a deterrent and a record, not proof.
 

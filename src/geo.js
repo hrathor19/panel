@@ -97,3 +97,72 @@ export function distanceKm(a, b) {
     + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(h)));
 }
+
+/* ── coordinates to an address ──────────────────────────────────────── */
+
+// A latitude and longitude answers "where" only if you paste it into a map.
+// This turns the browser's reported position into something readable in a list.
+//
+// It does mean the coordinates go to the geocoder, so REVERSE_GEOCODE=0 turns
+// it off and the raw numbers are still kept either way.
+
+const REVERSE_URL = process.env.REVERSE_GEOCODE_URL
+  || 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat={lat}&lon={lon}';
+const REVERSE_ENABLED = process.env.REVERSE_GEOCODE !== '0';
+const REVERSE_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export async function reverseGeocode(latitude, longitude) {
+  if (!REVERSE_ENABLED) return null;
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
+
+  // ~11 m of precision is plenty to key a cache on, and keeps repeat sign-ins
+  // from the same desk down to a single lookup.
+  const key = `revgeo:${latitude.toFixed(4)},${longitude.toFixed(4)}`;
+  const cached = await storage.getCache(key).catch(() => null);
+  if (cached) return cached;
+
+  try {
+    const url = REVERSE_URL.replace('{lat}', String(latitude)).replace('{lon}', String(longitude));
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'npf-gateway (panel access gateway)' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    if (!body || body.error) return null;
+
+    const a = body.address ?? {};
+    const place = {
+      label: body.display_name ?? null,
+      // Shortest form that still identifies a spot to a human.
+      short: [
+        a.neighbourhood || a.suburb || a.road || a.hamlet,
+        a.city || a.town || a.village || a.county,
+      ].filter(Boolean).join(', ') || body.name || null,
+      city: a.city || a.town || a.village || null,
+      state: a.state || null,
+      postcode: a.postcode || null,
+      country: a.country || null,
+    };
+    await storage.setCache(key, place, REVERSE_CACHE_MS).catch(() => {});
+    return place;
+  } catch {
+    // A slow geocoder must never hold up a sign-in.
+    return null;
+  }
+}
+
+// IANA keeps "Asia/Calcutta" as the canonical id for backwards compatibility
+// and browsers report it verbatim, which reads like a mistake in a list.
+const TZ_ALIASES = {
+  'Asia/Calcutta': 'Asia/Kolkata',
+  'Asia/Katmandu': 'Asia/Kathmandu',
+  'Asia/Rangoon': 'Asia/Yangon',
+  'Asia/Saigon': 'Asia/Ho_Chi_Minh',
+  'Europe/Kiev': 'Europe/Kyiv',
+};
+
+export function prettyTimezone(tz) {
+  if (!tz) return null;
+  return (TZ_ALIASES[tz] ?? tz).replace(/_/g, ' ');
+}

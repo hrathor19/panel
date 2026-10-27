@@ -64,11 +64,20 @@ const errorBox = $('error');
 const statusRow = $('status');
 const statusText = $('statusText');
 
-let locationRequired = false;
+let mode = 'off';
 try {
-  ({ location: locationRequired } = await (await fetch('/gw/auth/requirements')).json());
+  ({ mode } = await (await fetch('/gw/auth/requirements')).json());
 } catch { /* if we cannot ask, let the server be the judge */ }
-$('why').hidden = !locationRequired;
+const locationWanted = mode === 'capture' || mode === 'require';
+const locationRequired = mode === 'require';
+$('why').hidden = !locationWanted;
+if (locationWanted && !locationRequired) {
+  $('why').innerHTML = '';
+  $('why').append(
+    Object.assign(document.createElement('strong'), { textContent: 'Location is recorded' }),
+    document.createTextNode('Signing in notes where you are, so access to lead data can be traced. '
+      + 'Your browser will ask for permission; you can still sign in if you decline.'));
+}
 
 function setStatus(text) {
   statusText.textContent = text;
@@ -116,14 +125,18 @@ $('form').addEventListener('submit', async (event) => {
   try {
     let position = { status: 'skipped' };
 
-    if (locationRequired) {
+    if (locationWanted) {
       const blocked = locationUnavailableReason();
-      if (blocked) { errorBox.textContent = blocked; return; }
-      setStatus('Checking your location…');
-      position = await getLocation();
-      setStatus('');
+      // In capture mode an unusable context is recorded, not an obstacle.
+      if (blocked && locationRequired) { errorBox.textContent = blocked; return; }
+      if (blocked) position = { status: 'unavailable', message: blocked };
+      if (!blocked) {
+        setStatus('Checking your location…');
+        position = await getLocation();
+        setStatus('');
+      }
 
-      if (position.status !== 'granted') {
+      if (locationRequired && position.status !== 'granted') {
         errorBox.textContent = position.status === 'denied'
           ? 'Location access was denied. This panel can only be opened with location sharing turned on — allow it for this site in your browser, then try again.'
           : position.status === 'timeout'

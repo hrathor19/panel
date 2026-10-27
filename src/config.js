@@ -26,13 +26,21 @@ export const config = {
   secureCookies: process.env.SECURE_COOKIES === '1' || trustProxy,
   onVercel,
 
-  // Sign-in must carry a browser location. Note this only works where the
-  // browser treats the page as a secure context — HTTPS, or localhost. Over
-  // plain HTTP on a LAN address the API is refused outright and nobody can get
-  // in, so it stays off until TLS is in place.
-  requireLocation: process.env.REQUIRE_LOCATION === '1',
-  // How stale a reported position may be, and how long to wait for one.
-  locationMaxAgeMs: Number(process.env.LOCATION_MAX_AGE_MS || 5 * 60 * 1000),
+  // What the sign-in page does about location.
+  //   off      never ask
+  //   capture  ask and record, but let people in either way
+  //   require  ask, and refuse the sign-in without one
+  // All three need a secure context to produce anything: browsers refuse
+  // geolocation over plain HTTP on anything but localhost.
+  locationMode: (() => {
+    if (process.env.REQUIRE_LOCATION === '1') return 'require';   // older name
+    const mode = (process.env.LOCATION_MODE || 'off').toLowerCase();
+    return ['off', 'capture', 'require'].includes(mode) ? mode : 'off';
+  })(),
+
+  // Turn the reported coordinates into a readable address. Sends those
+  // coordinates to the geocoder, so it is opt-out.
+  reverseGeocode: process.env.REVERSE_GEOCODE !== '0',
 
   // Leak controls. Watermarking is attribution, not prevention: a screenshot
   // cannot be blocked by a web page, so the aim is that any capture carries
