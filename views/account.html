@@ -1,86 +1,67 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your account · Panel Gateway</title>
+<script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('gw-theme') === 'dark' ? 'dark' : 'light'); } catch (e) {}</script>
 <link rel="stylesheet" href="/gw-assets/app.css">
 <style>
-  .wrap { max-width: 560px; margin: 0 auto; padding: 32px 18px 72px; }
-  .meta { display: grid; grid-template-columns: auto 1fr; gap: 9px 20px; font-size: 14px; }
+  .wrap { max-width: 620px; margin: 0 auto; padding: 34px 24px 72px; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 11px 24px; font-size: 14px; margin: 0; }
   .meta dt { color: var(--muted); }
   .meta dd { margin: 0; }
-  .bar { height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin-top: 8px; }
+  .bar { height: 5px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin-top: 9px; }
   .bar i { display: block; height: 100%; width: 0; background: var(--danger); transition: width .2s, background .2s; }
 </style>
 </head>
 <body>
 <header class="topbar">
-  <a href="/panels" style="display:flex;align-items:center;gap:9px;font-weight:640;letter-spacing:-.02em;color:inherit">
-    <span style="width:9px;height:9px;border-radius:3px;background:var(--accent)"></span> Panel Gateway
-  </a>
-  <span class="spacer"></span>
-  <span id="menuSlot"></span>
+  <a href="/panels" class="brand" style="padding:0;color:inherit"><span class="brand-mark" id="brandMark"></span><span>Panel Gateway</span></a>
+  <span class="grow"></span>
+  <span id="themeSlot"></span>
+  <span id="accountSlot"></span>
 </header>
 
 <div class="wrap">
-  <div class="page-head">
-    <div>
-      <h1>Your account</h1>
-      <p class="sub">Change the password you use to sign in to the gateway.</p>
-    </div>
-  </div>
+  <div class="page-head"><div><h1>Your account</h1><p>Change the password you use to sign in to the gateway.</p></div></div>
 
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-body">
-      <dl class="meta" id="meta"></dl>
-    </div>
-  </div>
+  <div class="card" style="margin-bottom:18px"><div style="padding:20px"><dl class="meta" id="meta"></dl></div></div>
 
   <form class="card" id="form">
-    <div class="card-head"><h2>Change password</h2></div>
-    <div class="card-body">
+    <div class="card-head"><div class="card-icon tone-blue" id="keyIcon"></div><div><h2>Change password</h2><p>Your other sessions are signed out when it changes.</p></div></div>
+    <div style="padding:20px">
       <div class="inline-error" id="error"></div>
-      <div class="field">
-        <label for="current">Current password</label>
-        <input id="current" type="password" autocomplete="current-password" required>
-      </div>
+      <div class="field"><label for="current">Current password</label><input id="current" type="password" autocomplete="current-password" required></div>
       <div class="field">
         <label for="next">New password</label>
         <input id="next" type="password" autocomplete="new-password" required>
         <div class="bar"><i id="strength"></i></div>
         <p class="hint" id="hint">At least 10 characters.</p>
       </div>
-      <div class="field" style="margin-bottom:0">
-        <label for="confirm">Confirm new password</label>
-        <input id="confirm" type="password" autocomplete="new-password" required>
-      </div>
+      <div class="field" style="margin-bottom:0"><label for="confirm">Confirm new password</label><input id="confirm" type="password" autocomplete="new-password" required></div>
     </div>
-    <div class="d-foot">
-      <button class="primary" type="submit" id="submit">Change password</button>
-    </div>
+    <div class="d-foot"><button class="primary" type="submit" id="submit">Change password</button></div>
   </form>
 </div>
 
 <script type="module">
-import { $, el, api, toast, when, exactly, accountMenu, whoami } from '/gw-assets/ui.js';
+import { $, el, api, icon, toast, accountMenu, whoami, themeToggle } from '/gw-assets/ui.js';
 
 const MIN = 10;
+$('brandMark').append(icon('layers', 19));
+$('keyIcon').append(icon('key', 20));
+$('themeSlot').append(themeToggle());
 
-(async () => {
-  const { user } = await whoami();
-  $('menuSlot').append(accountMenu(user));
+const { user } = await whoami();
+$('accountSlot').append(accountMenu(user));
 
-  const rows = [
-    ['Name', user.name],
-    ['Email', user.email],
-    ['Role', user.role === 'admin' ? 'Administrator' : 'User'],
-    ['Exports', user.canExport ? 'Allowed' : 'Not allowed'],
-  ];
-  for (const [key, value] of rows) {
-    $('meta').append(el('dt', { text: key }), el('dd', { text: value }));
-  }
-})();
+for (const [key, value] of [
+  ['Name', user.name],
+  ['Email', user.email],
+  ['Role', user.role === 'admin' ? 'Administrator' : 'User'],
+  ['Exports', user.canExport ? 'Allowed' : 'Not allowed'],
+]) $('meta').append(el('dt', { text: key }), el('dd', { text: value }));
 
 // Rough, honest feedback: length plus variety. Not a security control — the
 // server enforces the minimum — just a nudge away from "password123".
@@ -97,7 +78,7 @@ $('next').addEventListener('input', (event) => {
   const pct = score(value);
   const bar = $('strength');
   bar.style.width = `${pct}%`;
-  bar.style.background = pct < 45 ? 'var(--danger)' : pct < 75 ? 'var(--warn)' : 'var(--ok)';
+  bar.style.background = pct < 45 ? 'var(--danger)' : pct < 75 ? 'var(--warn)' : 'var(--ok-dot)';
   $('hint').textContent = value.length < MIN
     ? `At least ${MIN} characters — ${MIN - value.length} to go.`
     : pct < 45 ? 'Weak. Add length or variety.' : pct < 75 ? 'Reasonable.' : 'Strong.';
@@ -106,18 +87,11 @@ $('next').addEventListener('input', (event) => {
 $('form').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('error').textContent = '';
-
   const currentPassword = $('current').value;
   const newPassword = $('next').value;
 
-  if (newPassword !== $('confirm').value) {
-    $('error').textContent = 'The two new passwords do not match.';
-    return;
-  }
-  if (newPassword.length < MIN) {
-    $('error').textContent = `The new password must be at least ${MIN} characters.`;
-    return;
-  }
+  if (newPassword !== $('confirm').value) { $('error').textContent = 'The two new passwords do not match.'; return; }
+  if (newPassword.length < MIN) { $('error').textContent = `The new password must be at least ${MIN} characters.`; return; }
 
   $('submit').disabled = true;
   try {

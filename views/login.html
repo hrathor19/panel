@@ -1,50 +1,52 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · Panel Gateway</title>
+<script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('gw-theme') === 'dark' ? 'dark' : 'light'); } catch (e) {}</script>
 <link rel="stylesheet" href="/gw-assets/app.css">
 <style>
-  body { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
-  .wrap { width: min(400px, 100%); }
-  .mark { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 17px; font-weight: 640; letter-spacing: -.02em; margin-bottom: 7px; }
-  .mark .dot { width: 11px; height: 11px; border-radius: 3.5px; background: var(--accent); }
-  .lede { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 22px; }
-  .foot { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 18px; }
-  .status { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  body { display: grid; place-items: center; min-height: 100vh; padding: 22px; }
+  .wrap { width: min(416px, 100%); }
+  .mark { display: flex; align-items: center; justify-content: center; gap: 11px; font-size: 19px; font-weight: 680; letter-spacing: -.025em; margin-bottom: 8px; }
+  .lede { text-align: center; color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  .foot { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 20px; }
+  .status { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin-bottom: 15px; }
   .status[hidden] { display: none; }
-  .spin { width: 13px; height: 13px; border: 2px solid var(--border-firm); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  .spin { width: 14px; height: 14px; border: 2px solid var(--border-firm); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg) } }
-  .why { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; font-size: 12.5px; color: var(--text-2); margin-bottom: 15px; }
+  .why { background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 10px; padding: 12px 14px; font-size: 12.5px; color: var(--text-2); margin-bottom: 16px; }
   .why strong { display: block; margin-bottom: 3px; font-size: 13px; color: var(--text); }
+  .corner { position: fixed; top: 18px; right: 18px; }
 </style>
 </head>
 <body>
+<span class="corner" id="themeSlot"></span>
+
 <div class="wrap">
-  <div class="mark"><span class="dot"></span> Panel Gateway</div>
+  <div class="mark"><span class="brand-mark" id="brandMark"></span> Panel Gateway</div>
   <p class="lede">Sign in with the account you were given.</p>
 
   <form class="card" id="form" novalidate>
-    <div class="card-body">
+    <div style="padding:22px">
       <div class="inline-error" id="error"></div>
       <div class="why" id="why" hidden>
         <strong>Location is required</strong>
-        Signing in records where you are, so access to lead data can be traced.
-        Your browser will ask for permission.
+        Signing in records where you are, so access to lead data can be traced. Your browser will ask for permission.
       </div>
 
       <div class="field">
         <label for="email">Email address</label>
         <input id="email" type="email" autocomplete="username" required autofocus spellcheck="false">
       </div>
-      <div class="field" style="margin-bottom:18px">
+      <div class="field" style="margin-bottom:20px">
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" required>
       </div>
 
       <div class="status" id="status" hidden><span class="spin"></span><span id="statusText"></span></div>
-      <button class="primary" type="submit" id="submit" style="width:100%">Sign in</button>
+      <button class="primary" type="submit" id="submit" style="width:100%;padding:11px">Sign in</button>
     </div>
   </form>
 
@@ -52,7 +54,10 @@
 </div>
 
 <script type="module">
-import { $, api } from '/gw-assets/ui.js';
+import { $, api, icon, themeToggle } from '/gw-assets/ui.js';
+
+$('brandMark').append(icon('layers', 19));
+$('themeSlot').append(themeToggle());
 
 const submit = $('submit');
 const errorBox = $('error');
@@ -71,9 +76,8 @@ function setStatus(text) {
 }
 
 // Geolocation is a secure-context API: over plain HTTP on anything but
-// localhost the browser refuses it outright, and no amount of clicking Allow
-// will change that. Saying so beats letting someone fight a prompt that is
-// never going to appear.
+// localhost the browser refuses it, and no amount of clicking Allow helps.
+// Saying so beats letting someone fight a prompt that will never appear.
 function locationUnavailableReason() {
   if (!window.isSecureContext) {
     return 'This page is not served over HTTPS, so your browser will not share your location. '
@@ -86,20 +90,9 @@ function locationUnavailableReason() {
 function getLocation() {
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({
-        status: 'granted',
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-        accuracy: pos.coords.accuracy,
-        timestamp: pos.timestamp,
-      }),
-      (err) => resolve({
-        status: err.code === err.PERMISSION_DENIED ? 'denied'
-          : err.code === err.TIMEOUT ? 'timeout' : 'unavailable',
-        message: err.message,
-      }),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
-    );
+      (pos) => resolve({ status: 'granted', latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy, timestamp: pos.timestamp }),
+      (err) => resolve({ status: err.code === err.PERMISSION_DENIED ? 'denied' : err.code === err.TIMEOUT ? 'timeout' : 'unavailable', message: err.message }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   });
 }
 
@@ -115,10 +108,7 @@ $('form').addEventListener('submit', async (event) => {
 
   const email = $('email').value.trim();
   const password = $('password').value;
-  if (!email || !password) {
-    errorBox.textContent = 'Enter your email and password.';
-    return;
-  }
+  if (!email || !password) { errorBox.textContent = 'Enter your email and password.'; return; }
 
   submit.disabled = true;
   submit.textContent = 'Signing in…';
@@ -128,10 +118,7 @@ $('form').addEventListener('submit', async (event) => {
 
     if (locationRequired) {
       const blocked = locationUnavailableReason();
-      if (blocked) {
-        errorBox.textContent = blocked;
-        return;
-      }
+      if (blocked) { errorBox.textContent = blocked; return; }
       setStatus('Checking your location…');
       position = await getLocation();
       setStatus('');
@@ -146,10 +133,7 @@ $('form').addEventListener('submit', async (event) => {
       }
     }
 
-    await api('/gw/auth/login', {
-      method: 'POST',
-      body: { email, password, location: position, client: clientDetails() },
-    });
+    await api('/gw/auth/login', { method: 'POST', body: { email, password, location: position, client: clientDetails() } });
 
     const next = new URLSearchParams(window.location.search).get('next');
     window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/panels';
