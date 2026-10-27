@@ -180,11 +180,34 @@ export function exactly(value) {
 }
 
 export async function copy(text, label = 'Copied') {
+  // navigator.clipboard does not exist outside a secure context, so on a
+  // plain-HTTP deployment (a bare IP has no certificate) the modern call is
+  // simply absent. The old execCommand path still works there, and copying a
+  // freshly generated password is not a flow worth losing.
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else if (!legacyCopy(text)) {
+      throw new Error('execCommand refused');
+    }
     toast(label);
   } catch {
     toast('Could not copy — select the text and copy it manually.', 'error');
+  }
+}
+
+function legacyCopy(text) {
+  const field = document.createElement('textarea');
+  field.value = text;
+  // Off-screen rather than hidden: the selection has to be real to be copied.
+  field.setAttribute('readonly', '');
+  field.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+  document.body.append(field);
+  field.select();
+  try {
+    return document.execCommand('copy');
+  } finally {
+    field.remove();
   }
 }
 

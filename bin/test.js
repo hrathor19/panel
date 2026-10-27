@@ -678,6 +678,47 @@ try {
 
   await admin(`/gw/admin/panels/${dead.id}`, { method: 'DELETE' });
 
+  /* ── plain HTTP behind a proxy ──────────────────────────────────── */
+  // Serving on a bare IP means nginx in front (so TRUST_PROXY=1) with no
+  // certificate behind it. If that still marks the cookie Secure the browser
+  // discards it and nobody can sign in — the sign-in appears to succeed and
+  // every page after it bounces back to the login form.
+  section('plain HTTP behind a proxy');
+  const PLAIN = 8195;
+  const plainDir = mkdtempSync(join(tmpdir(), 'npf-gw-plain-'));
+  const plain = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env, GW_DATA_DIR: plainDir, PORT: String(PLAIN),
+      SESSION_SECRET: 'plain-secret-'.padEnd(64, 'z'),
+      ADMIN_EMAIL: 'ip@test.local', ADMIN_PASSWORD: 'ip-admin-password-1',
+      TRUST_PROXY: '1', SECURE_COOKIES: '0', GEO_LOOKUP: '0',
+      NPF_EMAIL: '', NPF_PASSWORD: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  plain.stdout.on('data', () => {});
+  plain.stderr.on('data', () => {});
+
+  const PLAIN_BASE = `http://localhost:${PLAIN}`;
+  for (let i = 0; i < 60; i += 1) {
+    try { if ((await fetch(`${PLAIN_BASE}/gw/health`)).ok) break; } catch { /* starting */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const onIp = client(PLAIN_BASE);
+  const ipLogin = await onIp('/gw/auth/login', {
+    method: 'POST',
+    json: { email: 'ip@test.local', password: 'ip-admin-password-1' },
+  });
+  const ipCookie = (ipLogin.headers.getSetCookie?.() ?? []).find((c) => /gw_session/.test(c));
+  t('sign-in works with TRUST_PROXY=1 and SECURE_COOKIES=0', ipLogin.status === 200);
+  t('SECURE_COOKIES=0 beats TRUST_PROXY=1', Boolean(ipCookie) && !/Secure/i.test(ipCookie));
+  t('the cookie is still HttpOnly', /HttpOnly/i.test(ipCookie ?? ''));
+  t('the session actually carries', (await onIp('/gw/auth/me')).status === 200);
+
+  plain.kill();
+  rmSync(plainDir, { recursive: true, force: true });
+
   /* ── capture mode and addresses ─────────────────────────────────── */
   section('capture mode and addresses');
 

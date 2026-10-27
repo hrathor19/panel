@@ -377,6 +377,55 @@ the tarball too.
 | Audit log shows `127.0.0.1` for everyone | `TRUST_PROXY` not set | `TRUST_PROXY=1`, restart |
 | Panels listed but none open after a migration | new `SESSION_SECRET`, old stored passwords | re-enter them in `/admin` |
 
+## Running on the IP alone, with no domain
+
+Workable, and the fastest way to get something up. What it costs:
+
+- **No certificate.** Let's Encrypt issues for hostnames; there is nothing to
+  put a bare IP in. So everything — sign-ins, session cookies, and every lead
+  record the panel displays — crosses the internet in cleartext, readable by
+  anyone between the viewer and the instance. For a tool whose job is stopping
+  lead data walking out, that is a real hole, just a different one.
+- **No sign-in location.** Browsers refuse `navigator.geolocation` outside a
+  secure context. `LOCATION_MODE` has to stay `off`; device, IP and the IP's
+  city still get recorded, GPS coordinates do not.
+- **A browser warning on every visit**, which trains your team to click through
+  browser warnings.
+
+If you do it, the deltas from the main runbook are:
+
+**Step 4 (DNS)** — skip it.
+
+**Step 9 (`.env`)** — add one line:
+
+```ini
+TRUST_PROXY=1
+SECURE_COOKIES=0     # nginx is in front, but it is not terminating TLS
+```
+
+Without that, sessions are marked `Secure`, the browser throws the cookie away
+over plain HTTP, and every sign-in appears to succeed and then bounces straight
+back to the login page. Leave `LOCATION_MODE=off`.
+
+**Step 11 (nginx)** — match any hostname instead of one:
+
+```bash
+sudo sed -i 's/server_name .*/server_name _;/' /etc/nginx/sites-available/panel
+```
+
+**Step 12 (TLS)** — skip it. Reach the panel at `http://<elastic-ip>/login`.
+
+**Step 15** — leave `LOCATION_MODE` alone; `npm run doctor` will warn about the
+plain-HTTP choice, which is correct and worth leaving visible.
+
+Tighten the security group while you are here: with no hostname there is no
+reason for the world to reach it. Change the 80/443 inbound source from
+`0.0.0.0/0` to your office IP range, and only your team can open it at all.
+
+To add TLS later, point a hostname at the Elastic IP and run steps 4, 11 and 12
+as written — then drop `SECURE_COOKIES=0`, set `LOCATION_MODE=capture`, and
+restart. Nothing else changes, and no data is lost.
+
 ## If you run AWS and Azure at the same time
 
 They are two separate installations. Users, sessions and the audit log do not

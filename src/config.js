@@ -23,7 +23,13 @@ export const config = {
   // Behind nginx/Vercel the real client IP arrives in X-Forwarded-For, and the
   // connection to the browser is TLS even though this process speaks plain HTTP.
   trustProxy,
-  secureCookies: process.env.SECURE_COOKIES === '1' || trustProxy,
+  // Usually the same fact, but not always: a reverse proxy serving plain HTTP
+  // on a bare IP (no domain, so no certificate) trusts a proxy without
+  // terminating TLS. Marking the cookie Secure there means the browser throws
+  // it away and nobody can sign in at all, so SECURE_COOKIES=0 has to win.
+  secureCookies: process.env.SECURE_COOKIES === '0'
+    ? false
+    : process.env.SECURE_COOKIES === '1' || trustProxy,
   onVercel,
 
   // What the sign-in page does about location.

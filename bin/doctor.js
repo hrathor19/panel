@@ -44,7 +44,12 @@ if (config) {
   else warn('TRUST_PROXY is off', 'Behind nginx, set TRUST_PROXY=1 so the audit log records real client IPs and cookies are marked Secure.');
 
   if (config.secureCookies) ok('cookies will be marked Secure');
-  else warn('cookies are not marked Secure', 'Expected only if you are serving plain HTTP on a private network.');
+  else if (process.env.SECURE_COOKIES === '0' && config.trustProxy) {
+    warn(
+      'serving over plain HTTP on purpose (SECURE_COOKIES=0)',
+      'Sign-ins, session cookies and every lead record cross the internet in the clear, and browsers refuse geolocation, so LOCATION_MODE cannot be used. Put a hostname and a certificate in front when you can.',
+    );
+  } else warn('cookies are not marked Secure', 'Expected only if you are serving plain HTTP on a private network.');
 
   // The combination that locks everyone out: browser geolocation is refused
   // outright on a page that is not a secure context, so nobody can satisfy the
