@@ -224,6 +224,14 @@ NSG rules people forget, Node, the service user, systemd, nginx, certbot, and
 what to do on the first sign-in. `deploy/` also holds the systemd unit and nginx
 site used there.
 
+## Deploying to AWS
+
+See **[deploy/AWS.md](deploy/AWS.md)**: EC2 over the serverless options and why,
+the Elastic IP that stops the address changing under your DNS, security group
+rules in both directions, a read-only deploy key for the private repo, and how
+to carry `data/` and `.env` across if you are migrating rather than starting
+fresh. The systemd unit and nginx site in `deploy/` are the same ones.
+
 ## Deploying to any other VPS
 
 Behind nginx with TLS; the gateway speaks plain HTTP.
@@ -353,8 +361,11 @@ removing it the day they leave. One click in Admin → Users.
 
 ```bash
 npm start                                      # run it
-npm test                                       # 79 end-to-end tests, no real credentials
+npm test                                       # 178 end-to-end tests, no real credentials
+npm run doctor                                 # check the configuration before a deploy
 npm run verify                                 # sign in to every panel, report what came back
+npm run reach                                  # why a panel will not open: DNS, fetch, login
+npm run reach -- npf                           # just that one
 npm run userlist                               # recovery CLI — normal use is /admin
 npm run passwd -- someone@example.com          # set a new password
 npm run useradd -- new@example.com "Name" admin
