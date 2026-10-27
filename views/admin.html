@@ -123,6 +123,7 @@ const PAGES = [
   { id: 'users', label: 'Users', icon: 'users' },
   { id: 'panels', label: 'Panels', icon: 'server' },
   { id: 'sessions', label: 'Sessions', icon: 'key' },
+  { id: 'signins', label: 'Sign-ins', icon: 'shield' },
   { id: 'activity', label: 'Activity', icon: 'activity' },
 ];
 
@@ -670,6 +671,111 @@ function removePanel(panel) {
   });
 }
 
+const FLAG_TONE = {
+  'impossible-travel': 'bad',
+  'location-denied': 'bad',
+  'location-disagrees-with-network': 'bad',
+  'new-device': 'warn',
+  'new-location': 'warn',
+  'location-missing': 'warn',
+  'first-sign-in': '',
+};
+
+const OUTCOME_TONE = {
+  success: 'ok',
+  'bad-credentials': 'bad',
+  'location-blocked': 'bad',
+  throttled: 'bad',
+};
+
+const OUTCOME_LABEL = {
+  success: 'Signed in',
+  'bad-credentials': 'Wrong password',
+  'location-blocked': 'Location refused',
+  throttled: 'Throttled',
+};
+
+/* ── sign-in history ────────────────────────────────────────────────── */
+
+async function renderSignins(view) {
+  let entries = [];
+  let labels = {};
+  let filter = '';
+  let only = '';
+
+  const kinds = el('select', { style: 'max-width:180px', onChange: (e) => { only = e.target.value; paint(); } },
+    el('option', { value: '', text: 'All sign-ins' }),
+    el('option', { value: 'flagged', text: 'Flagged only' }),
+    el('option', { value: 'success', text: 'Successful' }),
+    el('option', { value: 'bad-credentials', text: 'Wrong password' }),
+    el('option', { value: 'location-blocked', text: 'Location refused' }),
+  );
+
+  const toolbar = [
+    searchBox('Search person, place, device…', (v) => { filter = v; paint(); }),
+    kinds,
+    el('span', { style: 'flex:1' }),
+    el('a', { class: 'btn sm', href: '/gw/admin/logins.csv' }, icon('download', 14), 'CSV'),
+    el('button', { class: 'sm', onClick: () => go('signins') }, icon('refresh', 14), 'Refresh'),
+  ];
+
+  view.append(tableCard(['When', 'Person', 'Outcome', 'Where', 'Device', 'Flags'], 'signinBody', toolbar));
+  skeletonRows($('signinBody'), 6, 6);
+
+  ({ entries, labels } = await api('/gw/admin/logins?limit=500'));
+  paint();
+
+  function paint() {
+    const body = $('signinBody');
+    const rows = entries.filter((e) => {
+      if (only === 'flagged' && (e.flags ?? []).length === 0) return false;
+      if (only && only !== 'flagged' && e.outcome !== only) return false;
+      if (!filter) return true;
+      return JSON.stringify(e).toLowerCase().includes(filter);
+    });
+
+    body.replaceChildren();
+    if (rows.length === 0) {
+      body.append(el('tr', {}, el('td', { colspan: 6 },
+        emptyState('shield', 'Nothing to show', 'Sign-ins appear here as people use the gateway.'))));
+      return;
+    }
+
+    for (const e of rows.slice(0, 300)) {
+      // Coordinates are only useful if you can look at them.
+      const coords = e.location?.latitude != null
+        ? el('a', {
+            href: `https://www.google.com/maps?q=${e.location.latitude},${e.location.longitude}`,
+            target: '_blank', rel: 'noopener', class: 'mono',
+            title: `Reported by the browser, accurate to about ${e.location.accuracyM ?? '?'} m`,
+          }, `${e.location.latitude.toFixed(4)}, ${e.location.longitude.toFixed(4)}`)
+        : el('span', { class: 'muted', text: e.location?.status ?? 'none' });
+
+      body.append(el('tr', {},
+        td('When', el('span', { class: 'nowrap', title: exactly(e.at), text: when(e.at) })),
+        td('Person', el('div', { class: 'stack' },
+          el('strong', { text: e.email ?? '—' }),
+          el('small', { class: 'mono', text: e.ip ?? '' }))),
+        td('Outcome', tag(OUTCOME_LABEL[e.outcome] ?? e.outcome, OUTCOME_TONE[e.outcome] ?? '')),
+        td('Where', el('div', { class: 'stack' },
+          el('span', { text: e.place }),
+          el('small', {}, coords))),
+        td('Device', el('div', { class: 'stack' },
+          el('span', { text: e.device ?? '—' }),
+          el('small', { text: [e.kind, e.screen, e.timezone].filter(Boolean).join(' · ') }))),
+        td('Flags', el('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
+          ...(e.flags ?? []).map((f) => {
+            const extra = f === 'impossible-travel' && e.travel
+              ? ` (${e.travel.km} km in ${e.travel.hours} h)`
+              : f === 'location-disagrees-with-network' && e.locationGapKm
+                ? ` (${e.locationGapKm} km apart)` : '';
+            return tag((labels[f] ?? f) + extra, FLAG_TONE[f] ?? '');
+          }))),
+      ));
+    }
+  }
+}
+
 /* ── sessions ───────────────────────────────────────────────────────── */
 
 async function renderSessions(view) {
@@ -677,15 +783,15 @@ async function renderSessions(view) {
     el('h2', { text: 'Signed in now' }), el('span', { style: 'flex:1' }),
     el('button', { class: 'sm', onClick: () => go('sessions') }, icon('refresh', 14), 'Refresh'),
   ];
-  view.append(tableCard(['Person', 'Signed in', 'IP address', 'Device', ''], 'sessionsBody', toolbar));
-  skeletonRows($('sessionsBody'), 3, 5);
+  view.append(tableCard(['Person', 'Signed in', 'Where', 'Device', 'Flags', ''], 'sessionsBody', toolbar));
+  skeletonRows($('sessionsBody'), 3, 6);
 
   const { sessions } = await api('/gw/admin/sessions');
   const body = $('sessionsBody');
   body.replaceChildren();
 
   if (sessions.length === 0) {
-    body.append(el('tr', {}, el('td', { colspan: 5 }, emptyState('key', 'Nobody signed in', 'Sessions appear here as people sign in.'))));
+    body.append(el('tr', {}, el('td', { colspan: 6 }, emptyState('key', 'Nobody signed in', 'Sessions appear here as people sign in.'))));
     return;
   }
 
@@ -695,8 +801,14 @@ async function renderSessions(view) {
         el('strong', {}, session.name, session.current ? el('span', { class: 'muted', text: '  (this session)' }) : null),
         el('small', { text: session.email }))),
       td('Signed in', el('span', { title: exactly(session.createdAt), text: when(session.createdAt) })),
-      td('IP address', el('span', { class: 'mono', text: session.ip ?? '—' })),
-      td('Device', el('span', { class: 'muted', text: shortAgent(session.userAgent) })),
+      td('Where', el('div', { class: 'stack' },
+        el('span', { text: session.place ?? '—' }),
+        el('small', { class: 'mono', text: session.ip ?? '' }))),
+      td('Device', el('div', { class: 'stack' },
+        el('span', { text: session.device?.label ?? shortAgent(session.userAgent) }),
+        el('small', { text: [session.device?.kind, session.device?.timezone].filter(Boolean).join(' · ') }))),
+      td('Flags', el('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' },
+        ...(session.flags ?? []).map((f) => tag(f.replace(/-/g, ' '), FLAG_TONE[f] ?? '')))),
       el('td', { class: 'right' },
         el('button', {
           class: 'sm danger', disabled: session.current,
@@ -794,7 +906,7 @@ async function renderActivity(view) {
 
 /* ── routing ────────────────────────────────────────────────────────── */
 
-const RENDERERS = { overview: renderOverview, users: renderUsers, panels: renderPanels, sessions: renderSessions, activity: renderActivity };
+const RENDERERS = { overview: renderOverview, users: renderUsers, panels: renderPanels, sessions: renderSessions, signins: renderSignins, activity: renderActivity };
 
 async function go(id) {
   const page = PAGES.find((p) => p.id === id) ?? PAGES[0];

@@ -46,6 +46,21 @@ if (config) {
   if (config.secureCookies) ok('cookies will be marked Secure');
   else warn('cookies are not marked Secure', 'Expected only if you are serving plain HTTP on a private network.');
 
+  // The combination that locks everyone out: browser geolocation is refused
+  // outright on a page that is not a secure context, so nobody can satisfy the
+  // requirement no matter what they click.
+  if (config.requireLocation && !config.secureCookies) {
+    fail(
+      'REQUIRE_LOCATION is on but the gateway is not served over HTTPS',
+      'Browsers refuse geolocation on plain HTTP (except localhost), so every sign-in will fail. '
+      + 'Finish the TLS setup and set TRUST_PROXY=1, or set REQUIRE_LOCATION=0 for now.',
+    );
+  } else if (config.requireLocation) {
+    ok('location is required at sign-in');
+  } else {
+    notes.push('location is not required at sign-in (REQUIRE_LOCATION=0)');
+  }
+
   if (config.seed.password) {
     warn('NPF_PASSWORD is still set in the environment', 'It seeds a panel when none exist. Comment it out once your panels are configured in /admin.');
   }

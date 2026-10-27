@@ -1,11 +1,14 @@
 import express from 'express';
 import { config } from '../config.js';
-import { verifyUser, findUserById, canUseePanel, publicUser, recordLogin, changeOwnPassword } from '../users.js';
+import { verifyUser, findUserById, canUseePanel, publicUser, recordLogin as markLastLogin, changeOwnPassword } from '../users.js';
 import { listPanels } from '../panels.js';
 import { sessionState } from '../npf-session.js';
 import * as sessions from '../sessions.js';
 import { audit } from '../audit.js';
 import { checkLoginAllowed, clearLoginAttempts } from '../rate-limit.js';
+import { describeDevice, deviceFingerprint } from '../device.js';
+import { lookupIp, describePlace } from '../geo.js';
+import { recordLogin, historyFor, assessRisk } from '../login-history.js';
 
 export const COOKIE = sessions.COOKIE;
 
@@ -68,30 +71,115 @@ export async function visiblePanels(session) {
 export const authRouter = express.Router();
 authRouter.use(express.json({ limit: '100kb' }));
 
+// Everything known about a sign-in attempt. The device and client fields come
+// from the browser and can say anything; the IP and what it resolves to are
+// observed here and cannot. Both are kept so they can be compared.
+async function gatherContext(req, location) {
+  const userAgent = req.get('user-agent') ?? '';
+  const client = req.body?.client ?? {};
+  const device = {
+    ...describeDevice(userAgent),
+    fingerprint: deviceFingerprint(userAgent, client),
+    screen: typeof client.screen === 'string' ? client.screen.slice(0, 24) : null,
+    timezone: typeof client.timezone === 'string' ? client.timezone.slice(0, 64) : null,
+    language: (req.get('accept-language') ?? '').split(',')[0].slice(0, 16) || null,
+  };
+
+  return { ip: req.ip, device, ipPlace: await lookupIp(req.ip), location: cleanLocation(location) };
+}
+
+// Only the fields we expect, coerced — this came from a browser.
+function cleanLocation(location) {
+  if (!location || typeof location !== 'object') return { status: 'missing' };
+  if (location.status && location.status !== 'granted') {
+    return { status: String(location.status).slice(0, 32), message: String(location.message ?? '').slice(0, 160) };
+  }
+  const lat = Number(location.latitude);
+  const lon = Number(location.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return { status: 'invalid' };
+  }
+  return {
+    status: 'granted',
+    latitude: Math.round(lat * 1e5) / 1e5,
+    longitude: Math.round(lon * 1e5) / 1e5,
+    accuracyM: Number.isFinite(Number(location.accuracy)) ? Math.round(Number(location.accuracy)) : null,
+    reportedAt: location.timestamp ? new Date(Number(location.timestamp)).toISOString() : null,
+  };
+}
+
+// Told to the login page before it asks for anything, so a permission prompt
+// only appears where it is actually needed.
+authRouter.get('/requirements', (req, res) => {
+  res.json({ location: config.requireLocation });
+});
+
 authRouter.post('/login', async (req, res) => {
-  const { email, password } = req.body ?? {};
+  const { email, password, location } = req.body ?? {};
+  const typedEmail = String(email ?? '').trim().toLowerCase();
 
   const gate = await checkLoginAllowed(req.ip, email);
   if (!gate.allowed) {
-    audit({ event: 'login-throttled', email: String(email ?? '').toLowerCase(), ip: req.ip });
+    audit({ event: 'login-throttled', email: typedEmail, ip: req.ip });
+    await recordLogin({ email: typedEmail, outcome: 'throttled', ip: req.ip });
     return res.status(429).json({
       error: `Too many attempts. Try again in about ${gate.retryAfterMinutes} minutes.`,
     });
   }
 
+  // Credentials first: someone who cannot sign in anyway should not be told
+  // what else the gateway wants, and a failed guess should not cost a lookup.
   const user = await verifyUser(email, password);
   if (!user) {
-    audit({ event: 'login-failed', email: String(email ?? '').toLowerCase(), ip: req.ip });
+    audit({ event: 'login-failed', email: typedEmail, ip: req.ip });
+    await recordLogin({
+      email: typedEmail, outcome: 'bad-credentials', ip: req.ip,
+      device: describeDevice(req.get('user-agent')),
+    });
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
-  const token = await sessions.create(user, { ip: req.ip, userAgent: req.get('user-agent') });
-  res.cookie(COOKIE, token, cookieOptions());
-  await clearLoginAttempts(email);
-  await recordLogin(user.id, req.ip);
-  audit({ event: 'login', user: user.email, role: user.role, ip: req.ip });
+  const context = await gatherContext(req, location);
+  const prior = await historyFor(user.id, 300);
 
-  return res.json({ ok: true, user: publicUser(user) });
+  if (config.requireLocation && context.location.status !== 'granted') {
+    const refused = context.location.status === 'denied';
+    audit({ event: 'login-location-blocked', user: user.email, status: context.location.status, ip: req.ip });
+    await recordLogin({
+      ...context, userId: user.id, email: user.email, outcome: 'location-blocked',
+      flags: assessRisk({ ...context, at: new Date().toISOString(), outcome: 'location-blocked' }, prior),
+    });
+    return res.status(403).json({
+      error: refused
+        ? 'Location access was denied. This panel can only be opened with location sharing turned on — allow it in your browser and try again.'
+        : 'Your location could not be read. Allow location access for this site and try again.',
+      reason: 'location-required',
+    });
+  }
+
+  const entry = { ...context, at: new Date().toISOString(), userId: user.id, email: user.email, outcome: 'success' };
+  entry.flags = assessRisk(entry, prior);
+
+  const token = await sessions.create(user, {
+    ip: req.ip,
+    userAgent: req.get('user-agent'),
+    device: context.device,
+    place: describePlace(context.ipPlace),
+    location: context.location,
+    flags: entry.flags,
+  });
+  res.cookie(COOKIE, token, cookieOptions());
+
+  await clearLoginAttempts(email);
+  await markLastLogin(user.id, req.ip);
+  await recordLogin(entry);
+  audit({
+    event: 'login', user: user.email, role: user.role, ip: req.ip,
+    device: context.device.label, place: describePlace(context.ipPlace),
+    flags: entry.flags.length ? entry.flags : undefined,
+  });
+
+  return res.json({ ok: true, user: publicUser(user), flags: entry.flags });
 });
 
 authRouter.post('/logout', async (req, res) => {

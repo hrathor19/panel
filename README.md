@@ -79,6 +79,53 @@ export.
 Disabling, deleting, resetting a password or changing panel access takes effect
 **immediately** — no waiting for a session to lapse.
 
+## Sign-in location and forensics
+
+Every sign-in attempt is recorded with where it came from, on what, and whether
+anything about it looks unusual. Admin → Sign-ins.
+
+**Requiring a location.** With `REQUIRE_LOCATION=1` the login page asks the
+browser for a position and the server refuses to sign anyone in without one.
+A refused prompt gives a clear message and is itself recorded.
+
+Two things to be honest about:
+
+- **It needs HTTPS.** Geolocation is a secure-context API. Over plain HTTP on
+  anything but `localhost` the browser refuses it outright, and no amount of
+  clicking Allow helps. `npm run doctor` fails if you turn this on without TLS,
+  because the combination locks everyone out.
+- **A reported position can be faked.** Browser devtools have a location
+  override. Treat it as a deterrent and a record, not proof.
+
+**What is actually trustworthy.** The IP is observed by the server, not
+reported by the page, so it cannot simply be typed. Each sign-in stores both
+the claimed position and the IP's registered location, and compares them. A
+browser saying Delhi while the connection comes from Dubai is the interesting
+case, and it is flagged.
+
+**Recorded per sign-in:** time, account, outcome (signed in / wrong password /
+location refused / throttled), IP and what it resolves to, network operator,
+browser, operating system, device type, screen size, timezone, reported
+coordinates and their accuracy.
+
+**Flags raised:**
+
+| Flag | Means |
+|---|---|
+| Impossible travel | two sign-ins further apart than anyone could travel between them |
+| Location disagrees with network | reported position is 300 km+ from where the IP sits |
+| New device | browser/OS combination not seen for this account before |
+| New location | first sign-in from this city |
+| Location refused | the prompt was denied |
+| First sign-in | no prior history, so nothing to compare against |
+
+These are prompts for a person, not verdicts — "new device" means someone
+bought a laptop as often as it means two people share an account. Impossible
+travel is the one worth acting on without thinking twice.
+
+Exportable as CSV. IP lookups are cached for a day, private addresses are never
+sent anywhere, and a slow lookup never delays a sign-in.
+
 ## What it blocks
 
 **Bulk exports**, unless the person has the export permission:

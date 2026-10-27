@@ -20,6 +20,12 @@ export async function create(user, context = {}) {
       canExport: user.canExport,
       ip: context.ip ?? null,
       userAgent: String(context.userAgent ?? '').slice(0, 200),
+      // Carried on the session so the admin list can answer "who is signed in,
+      // from where, on what" without re-reading the sign-in log for each row.
+      device: context.device ?? null,
+      place: context.place ?? null,
+      location: context.location ?? null,
+      flags: context.flags ?? [],
       createdAt: Date.now(),
     },
     config.sessionTtlMs,

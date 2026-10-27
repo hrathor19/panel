@@ -11,6 +11,8 @@ import { clearPanelCaches } from './panel.js';
 import { storage } from '../storage.js';
 import * as sessions from '../sessions.js';
 import { audit, recentAudit } from '../audit.js';
+import { readHistory, RISK_LABELS } from '../login-history.js';
+import { describePlace } from '../geo.js';
 import { requireAdmin } from './auth.js';
 
 export const adminRouter = express.Router();
@@ -227,8 +229,10 @@ adminRouter.get('/sessions', handle(async (req, res) => {
   const live = await sessions.list();
   res.json({
     sessions: live
-      .map(({ id, email, name, role, ip, userAgent, createdAt }) => ({
-        id, email, name, role, ip, userAgent, createdAt,
+      .map(({ id, email, name, role, ip, userAgent, device, place, location, flags, createdAt }) => ({
+        id, email, name, role, ip, userAgent, device, place, location,
+        flags: flags ?? [],
+        createdAt,
         current: id === req.session.id,
       }))
       .sort((a, b) => b.createdAt - a.createdAt),
@@ -239,6 +243,51 @@ adminRouter.delete('/sessions/:id', handle(async (req, res) => {
   await sessions.destroyById(req.params.id);
   audit({ event: 'admin-session-revoked', by: req.session.email, session: req.params.id });
   res.json({ ok: true });
+}));
+
+/* ── sign-in history ─────────────────────────────────────────────────── */
+
+adminRouter.get('/logins', handle(async (req, res) => {
+  const entries = await readHistory(Number(req.query.limit) || 500);
+  res.json({
+    labels: RISK_LABELS,
+    entries: entries.map((e) => ({
+      at: e.at,
+      email: e.email ?? null,
+      outcome: e.outcome,
+      ip: e.ip ?? null,
+      place: describePlace(e.ipPlace),
+      network: e.ipPlace?.network ?? null,
+      device: e.device?.label ?? null,
+      kind: e.device?.kind ?? null,
+      screen: e.device?.screen ?? null,
+      timezone: e.device?.timezone ?? null,
+      location: e.location?.status === 'granted'
+        ? { latitude: e.location.latitude, longitude: e.location.longitude, accuracyM: e.location.accuracyM }
+        : { status: e.location?.status ?? 'missing' },
+      locationGapKm: e.locationGapKm ?? null,
+      travel: e.travel ?? null,
+      flags: e.flags ?? [],
+    })),
+  });
+}));
+
+adminRouter.get('/logins.csv', handle(async (req, res) => {
+  const entries = await readHistory(Number(req.query.limit) || 5000);
+  const columns = ['at', 'email', 'outcome', 'ip', 'place', 'network', 'device', 'screen', 'timezone', 'latitude', 'longitude', 'accuracyM', 'flags'];
+  const escape = (v) => {
+    const t = v === undefined || v === null ? '' : String(v);
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const rows = entries.map((e) => [
+    e.at, e.email, e.outcome, e.ip, describePlace(e.ipPlace), e.ipPlace?.network,
+    e.device?.label, e.device?.screen, e.device?.timezone,
+    e.location?.latitude, e.location?.longitude, e.location?.accuracyM,
+    (e.flags ?? []).join(' '),
+  ].map(escape).join(','));
+  res.type('text/csv')
+    .set('content-disposition', `attachment; filename=gateway-signins-${new Date().toISOString().slice(0, 10)}.csv`)
+    .send([columns.join(','), ...rows].join('\n'));
 }));
 
 /* ── activity ────────────────────────────────────────────────────────── */

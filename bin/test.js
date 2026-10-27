@@ -23,7 +23,7 @@ const t = (name, ok, extra = '') => {
 const section = (name) => console.log(`\n── ${name}`);
 
 // Minimal cookie jar: fetch does not keep cookies between calls.
-function client() {
+function client(base = BASE) {
   const jar = new Map();
   return async function call(path, options = {}) {
     const headers = { ...(options.headers ?? {}) };
@@ -32,7 +32,7 @@ function client() {
       headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(options.json);
     }
-    const res = await fetch(`${BASE}${path}`, { ...options, headers, redirect: 'manual' });
+    const res = await fetch(`${base}${path}`, { ...options, headers, redirect: 'manual' });
     for (const raw of res.headers.getSetCookie?.() ?? []) {
       const [pair] = raw.split(';');
       const eq = pair.indexOf('=');
@@ -62,6 +62,7 @@ async function boot() {
       NPF_PASSWORD: '',
       TRUST_PROXY: '0',
       BULK_MAX_PER_WINDOW: '5',
+      GEO_LOOKUP: '0',
       BULK_WINDOW_MINUTES: '60',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -492,6 +493,126 @@ try {
   const instEntries = (await (await admin('/gw/admin/audit?limit=500')).json()).entries;
   t('institute refusals are recorded against the person',
     instEntries.some((e) => e.reason === 'institute-not-assigned' && e.user === 'scoped@test.local'));
+
+
+  /* ── sign-in forensics ──────────────────────────────────────────── */
+  section('sign-in forensics');
+
+  const UA_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  const UA_WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0';
+
+  const forensic = client();
+  const fUser = await (await admin('/gw/admin/users', {
+    method: 'POST', json: { email: 'forensic@test.local', name: 'Forensic', role: 'user', panels: '*' },
+  })).json();
+
+  await forensic('/gw/auth/login', {
+    method: 'POST', headers: { 'User-Agent': UA_MAC },
+    json: {
+      email: 'forensic@test.local', password: fUser.password,
+      location: { status: 'granted', latitude: 28.6139, longitude: 77.209, accuracy: 42 },
+      client: { screen: '1512x982', timezone: 'Asia/Kolkata' },
+    },
+  });
+
+  const logins = await (await admin('/gw/admin/logins?limit=200')).json();
+  const mine = logins.entries.find((e) => e.email === 'forensic@test.local' && e.outcome === 'success');
+  t('the sign-in is recorded', Boolean(mine));
+  t('the device is parsed from the user agent', mine.device === 'Chrome 131 on macOS 10.15.7');
+  t('the screen size is kept', mine.screen === '1512x982');
+  t('the timezone is kept', mine.timezone === 'Asia/Kolkata');
+  t('the reported coordinates are kept', mine.location.latitude === 28.6139 && mine.location.longitude === 77.209);
+  t('the accuracy is kept', mine.location.accuracyM === 42);
+  t('a LAN address is not sent to a geo service', mine.place === 'Local network');
+  t('a first sign-in is flagged as such', mine.flags.includes('first-sign-in'));
+
+  // same person, different machine
+  const other = client();
+  await other('/gw/auth/login', {
+    method: 'POST', headers: { 'User-Agent': UA_WIN },
+    json: { email: 'forensic@test.local', password: fUser.password, location: { status: 'granted', latitude: 28.6139, longitude: 77.209 }, client: { screen: '1920x1080', timezone: 'Asia/Kolkata' } },
+  });
+  const afterSwitch = (await (await admin('/gw/admin/logins?limit=200')).json())
+    .entries.find((e) => e.email === 'forensic@test.local' && e.device?.includes('Edge'));
+  t('a different machine is flagged as a new device', afterSwitch.flags.includes('new-device'));
+
+  // a wrong password is recorded too
+  const wrong = client();
+  await wrong('/gw/auth/login', { method: 'POST', headers: { 'User-Agent': UA_MAC }, json: { email: 'forensic@test.local', password: 'nope' } });
+  const failed = (await (await admin('/gw/admin/logins?limit=200')).json())
+    .entries.find((e) => e.email === 'forensic@test.local' && e.outcome === 'bad-credentials');
+  t('a failed attempt is recorded', Boolean(failed));
+  t('the failed attempt keeps the device', failed.device?.includes('Chrome'));
+
+  // the live session carries it as well
+  const liveNow = (await (await admin('/gw/admin/sessions')).json()).sessions
+    .find((x) => x.email === 'forensic@test.local');
+  t('the live session carries the device', liveNow.device?.label?.includes('Edge'));
+  t('the live session carries the place', typeof liveNow.place === 'string');
+
+  t('sign-ins export as CSV', (await admin('/gw/admin/logins.csv')).status === 200);
+  t('a non-admin cannot read sign-in history', (await forensic('/gw/admin/logins')).status === 403);
+
+  /* ── location requirement ───────────────────────────────────────── */
+  section('location requirement');
+
+  const SECURE = 8193;
+  const secureDir = mkdtempSync(join(tmpdir(), 'npf-gw-loc-'));
+  const secure = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env, GW_DATA_DIR: secureDir, PORT: String(SECURE),
+      SESSION_SECRET: 'loc-secret-'.padEnd(64, 'y'),
+      ADMIN_EMAIL: 'boss@test.local', ADMIN_PASSWORD: 'boss-password-123',
+      REQUIRE_LOCATION: '1', GEO_LOOKUP: '0', NPF_EMAIL: '', NPF_PASSWORD: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  secure.stdout.on('data', () => {});
+  secure.stderr.on('data', () => {});
+
+  const SECURE_BASE = `http://localhost:${SECURE}`;
+  for (let i = 0; i < 60; i += 1) {
+    try { if ((await fetch(`${SECURE_BASE}/gw/health`)).ok) break; } catch { /* starting */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const locked = client(SECURE_BASE);
+  const creds = { email: 'boss@test.local', password: 'boss-password-123' };
+
+  const req = await (await fetch(`${SECURE_BASE}/gw/auth/requirements`)).json();
+  t('the login page is told location is required', req.location === true);
+
+  const noLoc = await locked('/gw/auth/login', { method: 'POST', json: creds });
+  t('no location is refused', noLoc.status === 403);
+  const noLocBody = await noLoc.json();
+  t('the refusal names the reason', noLocBody.reason === 'location-required');
+
+  const denied = await locked('/gw/auth/login', { method: 'POST', json: { ...creds, location: { status: 'denied' } } });
+  t('a denied location is refused', denied.status === 403);
+  t('the denial message says what to do', /allow it in your browser/i.test((await denied.json()).error));
+
+  const nonsense = await locked('/gw/auth/login', { method: 'POST', json: { ...creds, location: { status: 'granted', latitude: 999, longitude: 0 } } });
+  t('impossible coordinates are refused', nonsense.status === 403);
+
+  // credentials are still checked first, so a stranger learns nothing
+  const strangerDenied = await locked('/gw/auth/login', { method: 'POST', json: { email: 'boss@test.local', password: 'wrong', location: { status: 'denied' } } });
+  t('a wrong password fails before the location check', strangerDenied.status === 401);
+
+  const signedIn = await locked('/gw/auth/login', {
+    method: 'POST',
+    json: { ...creds, location: { status: 'granted', latitude: 19.076, longitude: 72.8777, accuracy: 30 } },
+  });
+  t('a granted location signs in', signedIn.status === 200);
+  t('the session works afterwards', (await locked('/gw/auth/me')).status === 200);
+
+  const lockedAdmin = client(SECURE_BASE);
+  await lockedAdmin('/gw/auth/login', { method: 'POST', json: { ...creds, location: { status: 'granted', latitude: 19.076, longitude: 72.8777 } } });
+  const blockedRows = (await (await lockedAdmin('/gw/admin/logins?limit=100')).json()).entries;
+  t('refused sign-ins are recorded', blockedRows.some((e) => e.outcome === 'location-blocked'));
+  t('a refusal records why', blockedRows.some((e) => e.flags?.includes('location-denied')));
+
+  secure.kill();
+  rmSync(secureDir, { recursive: true, force: true });
 
 } catch (err) {
   fail += 1;

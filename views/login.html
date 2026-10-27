@@ -7,11 +7,17 @@
 <link rel="stylesheet" href="/gw-assets/app.css">
 <style>
   body { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
-  .wrap { width: min(394px, 100%); }
+  .wrap { width: min(400px, 100%); }
   .mark { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 17px; font-weight: 640; letter-spacing: -.02em; margin-bottom: 7px; }
   .mark .dot { width: 11px; height: 11px; border-radius: 3.5px; background: var(--accent); }
   .lede { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 22px; }
   .foot { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 18px; }
+  .status { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  .status[hidden] { display: none; }
+  .spin { width: 13px; height: 13px; border: 2px solid var(--border-firm); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .why { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; font-size: 12.5px; color: var(--text-2); margin-bottom: 15px; }
+  .why strong { display: block; margin-bottom: 3px; font-size: 13px; color: var(--text); }
 </style>
 </head>
 <body>
@@ -22,6 +28,12 @@
   <form class="card" id="form" novalidate>
     <div class="card-body">
       <div class="inline-error" id="error"></div>
+      <div class="why" id="why" hidden>
+        <strong>Location is required</strong>
+        Signing in records where you are, so access to lead data can be traced.
+        Your browser will ask for permission.
+      </div>
+
       <div class="field">
         <label for="email">Email address</label>
         <input id="email" type="email" autocomplete="username" required autofocus spellcheck="false">
@@ -30,6 +42,8 @@
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" required>
       </div>
+
+      <div class="status" id="status" hidden><span class="spin"></span><span id="statusText"></span></div>
       <button class="primary" type="submit" id="submit" style="width:100%">Sign in</button>
     </div>
   </form>
@@ -38,10 +52,62 @@
 </div>
 
 <script type="module">
-import { $, api, toast } from '/gw-assets/ui.js';
+import { $, api } from '/gw-assets/ui.js';
 
 const submit = $('submit');
 const errorBox = $('error');
+const statusRow = $('status');
+const statusText = $('statusText');
+
+let locationRequired = false;
+try {
+  ({ location: locationRequired } = await (await fetch('/gw/auth/requirements')).json());
+} catch { /* if we cannot ask, let the server be the judge */ }
+$('why').hidden = !locationRequired;
+
+function setStatus(text) {
+  statusText.textContent = text;
+  statusRow.hidden = !text;
+}
+
+// Geolocation is a secure-context API: over plain HTTP on anything but
+// localhost the browser refuses it outright, and no amount of clicking Allow
+// will change that. Saying so beats letting someone fight a prompt that is
+// never going to appear.
+function locationUnavailableReason() {
+  if (!window.isSecureContext) {
+    return 'This page is not served over HTTPS, so your browser will not share your location. '
+      + 'Open the gateway over https:// (or on the machine itself) to sign in.';
+  }
+  if (!navigator.geolocation) return 'This browser cannot report a location.';
+  return null;
+}
+
+function getLocation() {
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        status: 'granted',
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: pos.timestamp,
+      }),
+      (err) => resolve({
+        status: err.code === err.PERMISSION_DENIED ? 'denied'
+          : err.code === err.TIMEOUT ? 'timeout' : 'unavailable',
+        message: err.message,
+      }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
+    );
+  });
+}
+
+function clientDetails() {
+  let timezone = null;
+  try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* older browser */ }
+  return { screen: `${screen.width}x${screen.height}`, timezone };
+}
 
 $('form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -58,14 +124,41 @@ $('form').addEventListener('submit', async (event) => {
   submit.textContent = 'Signing in…';
 
   try {
-    await api('/gw/auth/login', { method: 'POST', body: { email, password } });
-    const next = new URLSearchParams(location.search).get('next');
-    location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/panels';
+    let position = { status: 'skipped' };
+
+    if (locationRequired) {
+      const blocked = locationUnavailableReason();
+      if (blocked) {
+        errorBox.textContent = blocked;
+        return;
+      }
+      setStatus('Checking your location…');
+      position = await getLocation();
+      setStatus('');
+
+      if (position.status !== 'granted') {
+        errorBox.textContent = position.status === 'denied'
+          ? 'Location access was denied. This panel can only be opened with location sharing turned on — allow it for this site in your browser, then try again.'
+          : position.status === 'timeout'
+            ? 'Timed out waiting for your location. Check that location services are on, then try again.'
+            : 'Your location could not be read. Check that location services are on, then try again.';
+        return;
+      }
+    }
+
+    await api('/gw/auth/login', {
+      method: 'POST',
+      body: { email, password, location: position, client: clientDetails() },
+    });
+
+    const next = new URLSearchParams(window.location.search).get('next');
+    window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/panels';
   } catch (err) {
     errorBox.textContent = err.message;
     $('password').value = '';
     $('password').focus();
   } finally {
+    setStatus('');
     submit.disabled = false;
     submit.textContent = 'Sign in';
   }
