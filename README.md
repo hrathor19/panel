@@ -253,8 +253,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=npfgw
-WorkingDirectory=/opt/npf-gateway
+User=panel
+WorkingDirectory=/opt/panel
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=5

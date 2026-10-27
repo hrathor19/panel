@@ -91,7 +91,7 @@ try {
       accessSync(storage.location, constants.W_OK);
       ok('data directory is writable');
     } catch {
-      fail(`cannot write to ${storage.location}`, `chown -R npfgw:npfgw ${storage.location}`);
+      fail(`cannot write to ${storage.location}`, `chown -R panel:panel ${storage.location}`);
     }
   }
 } catch (err) {

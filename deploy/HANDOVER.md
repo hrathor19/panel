@@ -62,12 +62,12 @@ you back up.
 
 ```
 browser ──HTTPS──► nginx (443) ──HTTP──► gateway (127.0.0.1:8080) ──► NoPaperForms
-                   certbot TLS           systemd: npf-gateway
+                   certbot TLS           systemd: panel
 ```
 
 - Node 20.12+, three dependencies, none of which compile
 - ~76 MB RSS under load; the systemd unit caps it at 320 MB
-- State is files under `/opt/npf-gateway/data` — no database
+- State is files under `/opt/panel/data` — no database
 - Port 8080 is localhost-facing only. Do not open it in the NSG.
 
 ## Single instance only
@@ -81,7 +81,7 @@ would need a small driver added first.
 ## Verifying you are done
 
 ```bash
-cd /opt/npf-gateway && sudo -u npfgw npm run doctor
+cd /opt/panel && sudo -u panel npm run doctor
 ```
 
 Everything should be `ok`, with at most a warning that no panels are configured
@@ -100,7 +100,7 @@ Then hand over:
 full access to the panels.
 
 ```bash
-sudo tar -czf /root/npf-gateway-$(date +%F).tgz -C /opt/npf-gateway data .env
+sudo tar -czf /root/panel-$(date +%F).tgz -C /opt/panel data .env
 ```
 
 ## Running the tests

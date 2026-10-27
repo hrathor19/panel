@@ -3,7 +3,11 @@ import { config } from './config.js';
 
 // Panel passwords sit on disk between restarts. Storing them in clear would
 // undo the point of the gateway, so they are sealed with a key derived from
-// SESSION_SECRET. Losing that secret means re-entering the panel passwords —
+// SESSION_SECRET.
+//
+// The salt below is deliberately NOT renamed along with the project. It is an
+// input to the key, not a label: change it and every stored panel password
+// becomes unreadable and has to be entered again. Losing that secret means re-entering the panel passwords —
 // it does not lock anyone out of the gateway itself.
 const KEY = scryptSync(config.sessionSecret, 'npf-gateway-panel-credentials', 32);
 

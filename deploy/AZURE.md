@@ -85,7 +85,7 @@ sudo apt-get install -y nodejs
 ## 4. A user and a home for it
 
 ```bash
-sudo useradd --system --create-home --home-dir /opt/npf-gateway --shell /usr/sbin/nologin npfgw
+sudo useradd --system --create-home --home-dir /opt/panel --shell /usr/sbin/nologin panel
 ```
 
 ## 5. Ship the code
@@ -94,16 +94,16 @@ From your laptop, in the project directory:
 
 ```bash
 tar --exclude=node_modules --exclude=data --exclude=.env --exclude=.git \
-    -czf /tmp/npf-gateway.tgz .
-scp /tmp/npf-gateway.tgz azureuser@panel.kollegeapply.com:/tmp/
+    -czf /tmp/panel.tgz .
+scp /tmp/panel.tgz azureuser@panel.kollegeapply.com:/tmp/
 ```
 
 On the VM:
 
 ```bash
-sudo tar -xzf /tmp/npf-gateway.tgz -C /opt/npf-gateway
-cd /opt/npf-gateway
-sudo -u npfgw npm ci --omit=dev
+sudo tar -xzf /tmp/panel.tgz -C /opt/panel
+cd /opt/panel
+sudo -u panel npm ci --omit=dev
 ```
 
 `npm ci` needs `package-lock.json`, which is in the archive. `--omit=dev` is
@@ -112,7 +112,7 @@ safe: every dependency the gateway runs on is a production one.
 ## 6. Configure
 
 ```bash
-sudo -u npfgw tee /opt/npf-gateway/.env >/dev/null <<EOF
+sudo -u panel tee /opt/panel/.env >/dev/null <<EOF
 SESSION_SECRET=$(openssl rand -hex 32)
 PORT=8080
 SESSION_HOURS=12
@@ -129,9 +129,9 @@ ADMIN_EMAIL=himanshu.rathore@kollegeapply.com
 ADMIN_PASSWORD=<choose a strong one, 10+ characters>
 EOF
 
-sudo chmod 600 /opt/npf-gateway/.env
-sudo mkdir -p /opt/npf-gateway/data
-sudo chown -R npfgw:npfgw /opt/npf-gateway
+sudo chmod 600 /opt/panel/.env
+sudo mkdir -p /opt/panel/data
+sudo chown -R panel:panel /opt/panel
 ```
 
 `TRUST_PROXY=1` matters: it makes the audit log record real client IPs instead
@@ -140,7 +140,7 @@ of `127.0.0.1`, and marks session cookies `Secure`.
 Check it before going further:
 
 ```bash
-cd /opt/npf-gateway && sudo -u npfgw npm run doctor
+cd /opt/panel && sudo -u panel npm run doctor
 ```
 
 Fix anything it marks `FAIL`.
@@ -148,10 +148,10 @@ Fix anything it marks `FAIL`.
 ## 7. Run it as a service
 
 ```bash
-sudo cp /opt/npf-gateway/deploy/npf-gateway.service /etc/systemd/system/
+sudo cp /opt/panel/deploy/panel.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now npf-gateway
-sudo systemctl status npf-gateway --no-pager
+sudo systemctl enable --now panel
+sudo systemctl status panel --no-pager
 ```
 
 It should report `active (running)`. Confirm locally:
@@ -163,8 +163,8 @@ curl -s localhost:8080/gw/health; echo
 ## 8. nginx
 
 ```bash
-sudo cp /opt/npf-gateway/deploy/nginx-gateway.conf /etc/nginx/sites-available/npf-gateway
-sudo ln -s /etc/nginx/sites-available/npf-gateway /etc/nginx/sites-enabled/
+sudo cp /opt/panel/deploy/nginx-panel.conf /etc/nginx/sites-available/panel
+sudo ln -s /etc/nginx/sites-available/panel /etc/nginx/sites-enabled/
 sudo nginx -t
 ```
 
@@ -203,7 +203,7 @@ Then:
 2. **Admin → Users** — add your team. Leave "may download exports" off unless
    someone genuinely needs it.
 3. Remove `ADMIN_PASSWORD` from `.env` (it is only read when no users exist) and
-   `sudo systemctl restart npf-gateway`.
+   `sudo systemctl restart panel`.
 4. **Rotate the NPF panel passwords.** Until you do, every copy already
    circulating still works and the gateway is just another door, not the only
    one.
@@ -213,11 +213,11 @@ Then:
 ## Day to day
 
 ```bash
-sudo systemctl restart npf-gateway        # after any code or .env change
-sudo journalctl -u npf-gateway -f         # live logs
-sudo journalctl -u npf-gateway --since today
-cd /opt/npf-gateway && sudo -u npfgw npm run doctor    # config check
-cd /opt/npf-gateway && sudo -u npfgw npm run verify    # sign in to every panel
+sudo systemctl restart panel        # after any code or .env change
+sudo journalctl -u panel -f         # live logs
+sudo journalctl -u panel --since today
+cd /opt/panel && sudo -u panel npm run doctor    # config check
+cd /opt/panel && sudo -u panel npm run verify    # sign in to every panel
 ```
 
 Code changes need a restart — Node loads modules once at start.
@@ -226,15 +226,15 @@ Code changes need a restart — Node loads modules once at start.
 
 ```bash
 # laptop
-tar --exclude=node_modules --exclude=data --exclude=.env --exclude=.git -czf /tmp/npf-gateway.tgz .
-scp /tmp/npf-gateway.tgz azureuser@panel.kollegeapply.com:/tmp/
+tar --exclude=node_modules --exclude=data --exclude=.env --exclude=.git -czf /tmp/panel.tgz .
+scp /tmp/panel.tgz azureuser@panel.kollegeapply.com:/tmp/
 
 # VM
-sudo tar -xzf /tmp/npf-gateway.tgz -C /opt/npf-gateway
-cd /opt/npf-gateway
-sudo -u npfgw npm ci --omit=dev
-sudo chown -R npfgw:npfgw /opt/npf-gateway
-sudo -u npfgw npm run doctor && sudo systemctl restart npf-gateway
+sudo tar -xzf /tmp/panel.tgz -C /opt/panel
+cd /opt/panel
+sudo -u panel npm ci --omit=dev
+sudo chown -R panel:panel /opt/panel
+sudo -u panel npm run doctor && sudo systemctl restart panel
 ```
 
 The archive excludes `data` and `.env`, so an update never overwrites your users,
@@ -247,7 +247,7 @@ decrypts the panel passwords. **Back up both, and keep them somewhere only you
 can read** — together they are full access to your panels.
 
 ```bash
-sudo tar -czf /root/npf-gateway-$(date +%F).tgz -C /opt/npf-gateway data .env
+sudo tar -czf /root/panel-$(date +%F).tgz -C /opt/panel data .env
 ```
 
 ---
@@ -258,7 +258,7 @@ sudo tar -czf /root/npf-gateway-$(date +%F).tgz -C /opt/npf-gateway data .env
 |---|---|---|
 | `curl localhost:8080` works, the domain does not | NSG still closed | Add the 80/443 inbound rules (step 2) |
 | certbot fails to issue | DNS not pointing at the VM yet | `dig +short panel.kollegeapply.com` |
-| `active (exited)` straight after start | config error | `journalctl -u npf-gateway -n 40` — the gateway prints a plain reason and exits |
+| `active (exited)` straight after start | config error | `journalctl -u panel -n 40` — the gateway prints a plain reason and exits |
 | Everything logs in, no panels listed | panels not added yet | `/admin` → Panels |
 | "Panel is temporarily unavailable" | shared panel credential wrong | `/admin` → Panels → **Test** |
 | Audit log shows `127.0.0.1` for everyone | `TRUST_PROXY` not set | set `TRUST_PROXY=1`, restart |

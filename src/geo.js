@@ -47,7 +47,7 @@ export async function lookupIp(rawIp) {
 
   try {
     const res = await fetch(LOOKUP_URL.replace('{ip}', encodeURIComponent(ip)), {
-      headers: { Accept: 'application/json', 'User-Agent': 'npf-gateway' },
+      headers: { Accept: 'application/json', 'User-Agent': 'panel' },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = await res.json();
@@ -124,7 +124,7 @@ export async function reverseGeocode(latitude, longitude) {
   try {
     const url = REVERSE_URL.replace('{lat}', String(latitude)).replace('{lon}', String(longitude));
     const res = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'npf-gateway (panel access gateway)' },
+      headers: { Accept: 'application/json', 'User-Agent': 'panel (panel access gateway)' },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) return null;
