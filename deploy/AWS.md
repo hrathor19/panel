@@ -377,6 +377,42 @@ the tarball too.
 | Audit log shows `127.0.0.1` for everyone | `TRUST_PROXY` not set | `TRUST_PROXY=1`, restart |
 | Panels listed but none open after a migration | new `SESSION_SECRET`, old stored passwords | re-enter them in `/admin` |
 
+## If you launched Amazon Linux 2023 instead of Ubuntu
+
+It works just as well; the package manager and a few paths differ. Steps 1–5
+and 9–10 are unchanged, and the login user is `ec2-user`, not `ubuntu`.
+
+**Step 6 (Node).** `apt-get` does not exist, and neither does `git` on a fresh
+AL2023 image:
+
+```bash
+sudo dnf install -y git nginx
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+sudo dnf install -y nodejs
+node -v
+```
+
+**Step 11 (nginx).** Red Hat layout: no `sites-available`/`sites-enabled`,
+everything lives in `conf.d`.
+
+```bash
+sudo cp /opt/panel/deploy/nginx-panel.conf /etc/nginx/conf.d/panel.conf
+sudo nginx -t && sudo systemctl enable --now nginx
+```
+
+`nginx -t` may say `conflicting server name "_" ... ignored`. That is the stock
+welcome page losing to ours — `conf.d` is included before the server block in
+`nginx.conf`, and the first match wins. Harmless.
+
+**Step 12 (TLS).** `sudo dnf install -y certbot python3-certbot-nginx`.
+
+If nginx returns 502 while `curl localhost:8080` works, SELinux is enforcing
+(AL2023 ships it permissive, so this is rare):
+
+```bash
+sudo setsebool -P httpd_can_network_connect 1
+```
+
 ## Running on the IP alone, with no domain
 
 Workable, and the fastest way to get something up. What it costs:
